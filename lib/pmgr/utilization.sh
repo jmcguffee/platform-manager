@@ -47,14 +47,15 @@ util_account_sweep() {
   # MSK needs broker IDs for its per-broker metrics.
   local msk="[]" arn name
   if [ "$(cat "$UTIL_DIR/kafka.json")" != null ]; then
-    while IFS=$'\t' read -r arn name; do
+    local itype
+    while IFS=$'\t' read -r arn name itype; do
       [ -n "$arn" ] || continue
       if capture "util-msk-nodes" aws kafka list-nodes --cluster-arn "$arn" --profile "$profile" --region "$region" --output json; then
         msk=$(jq -c --arg n "$name" --argjson have "$msk" \
-          '$have + [{ClusterName: $n, brokers: [.NodeInfoList[]? | .BrokerNodeInfo.BrokerId | select(. != null) | floor]}]' \
+          --arg t "$itype" '$have + [{ClusterName: $n, instanceType: $t, brokers: [.NodeInfoList[]? | .BrokerNodeInfo.BrokerId | select(. != null) | floor]}]' \
           "$PMGR_TMP/util-msk-nodes.out")
       fi
-    done < <(jq -r '.ClusterInfoList[]? | select(.ClusterType == "PROVISIONED") | [.ClusterArn, .ClusterName] | @tsv' "$UTIL_DIR/kafka.json")
+    done < <(jq -r '.ClusterInfoList[]? | select(.ClusterType == "PROVISIONED") | [.ClusterArn, .ClusterName, (.Provisioned.BrokerNodeGroupInfo.InstanceType // "")] | @tsv' "$UTIL_DIR/kafka.json")
   fi
 
   local missing="" svc
@@ -97,10 +98,28 @@ util_account_sweep() {
   results=$(jq -c 'group_by(.Id) | map({Id: .[0].Id, Timestamps: (map(.Timestamps // []) | add),
                                          Values: (map(.Values // []) | add)})' <<<"$results")
 
-  jq -cn --argjson resources "$resources" --argjson queries "$queries" --argjson results "$results" \
-    --argjson days "$days" --arg label "$label" --argjson t "$(util_thresholds)" \
-    '{resources: $resources, queries: $queries, results: $results, days: $days, t: $t, label: $label}' |
-    jq -c -f "$PMGR_JQ/utilization.jq"
+  local rows prices
+  rows=$(jq -cn --argjson resources "$resources" --argjson queries "$queries" --argjson results "$results" \
+    --argjson days "$days" --arg label "$label" --arg region "$region" --argjson t "$(util_thresholds)" \
+    '{resources: $resources, queries: $queries, results: $results, days: $days, t: $t, label: $label, region: $region}' |
+    jq -c -f "$PMGR_JQ/utilization.jq" | jq -cs .)
+  util_account_source "$label" "$region" "$rows"
+  # Price every resource, and the size each oversized one would move to.
+  prices=$(jq -c '(map(select(has("kind")))) as $m
+      | ($m[] | .price),
+        (.[] | select(has("check") and .down != null) | . as $f
+         | ($m[] | select(.kind == $f.svc and .name == $f.target) | .price + {type: $f.down}))' <<<"$rows" |
+    PRICE_PROFILE=$profile price_rows)
+  jq -c --argjson prices "${prices:-"{}"}" -f "$PMGR_JQ/cost_apply.jq" <<<"$rows" >"$UTIL_DIR/priced.jsonl"
+  jq -c 'select(has("kind"))' "$UTIL_DIR/priced.jsonl" | metric_rows
+  jq -c 'select(has("check"))' "$UTIL_DIR/priced.jsonl"
+}
+
+# util_account_source LABEL REGION ROWS : what was found in an account, for the Sources view.
+util_account_source() {
+  local summary
+  summary=$(jq -r 'map(select(has("kind"))) | group_by(.kind) | map("\(length) \({rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK"}[.[0].kind])") | join(", ")' <<<"$3")
+  source_row account "$1" true "Checked ${summary:-no RDS, Redshift, ElastiCache or MSK} in $2 over $(cfg '.utilization.lookback_days // 14') days"
 }
 
 util_thresholds() {
@@ -131,8 +150,15 @@ util_eks() {
   jq -cn --slurpfile pods "$dir/pods.json" --slurpfile nodes "$dir/nodes.json" \
     --slurpfile pm "$dir/podmetrics.json" --slurpfile nm "$dir/nodemetrics.json" \
     '{pods: $pods[0], nodes: $nodes[0], podmetrics: $pm[0], nodemetrics: $nm[0]}' |
-    jq -c --arg cluster "$name" --argjson ignore "$(cfg '.workloads.ignore_namespaces // [] | tojson')" \
-      -f "$PMGR_JQ/eks_utilization.jq"
+    jq -c --arg cluster "$name" --arg region "$(jq -r '(.region // "") as $r | if $r != "" then $r elif (.context | startswith("arn:aws:eks:")) then (.context | split(":")[3]) else "" end' <<<"$c")" \
+      --argjson ignore "$(cfg '.workloads.ignore_namespaces // [] | tojson')" -f "$PMGR_JQ/eks_utilization.jq" |
+    jq -cs . >"$dir/eks-rows.json"
+  local prices
+  prices=$(jq -c '.[] | select(.kind == "eks") | .node_types[] | select(.spot | not) | {svc: "ec2", region, type}' "$dir/eks-rows.json" |
+    PRICE_PROFILE=$profile price_rows)
+  jq -c --argjson prices "${prices:-"{}"}" -f "$PMGR_JQ/eks_cost.jq" "$dir/eks-rows.json" >"$dir/eks-priced.jsonl"
+  jq -c 'select(.kind == "eks")' "$dir/eks-priced.jsonl" | metric_rows
+  jq -c 'select(has("check"))' "$dir/eks-priced.jsonl"
 }
 
 # utilization_sweep : every account and every reachable cluster.

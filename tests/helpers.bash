@@ -14,7 +14,7 @@ setup_pmgr() {
   export PMGR_CONFIG="$BATS_TEST_TMPDIR/config.yaml"
   export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
   unset NO_COLOR
-  for lib in core auth clusters github runfailure pipelines workflows argo workloads utilization report serve commands; do
+  for lib in core auth clusters github runfailure pipelines workflows argo workloads pricing utilization report serve commands; do
     # shellcheck source=/dev/null
     . "$PMGR_ROOT/lib/pmgr/$lib.sh"
   done
@@ -46,4 +46,4 @@ identity() {
     '{UserId: "X", Account: $acct, Arn: "arn:aws:sts::\($acct):assumed-role/\($role)/me@example.com"}'
 }
 
-checks() { jq -r '.check' | sort -u | tr '\n' ' '; }
+checks() { jq -r 'select(has("check")) | .check' | sort -u | tr '\n' ' '; }

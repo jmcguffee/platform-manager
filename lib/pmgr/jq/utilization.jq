@@ -28,7 +28,8 @@ def can_shrink: (size_down != null) or (burstable | not);
 | ($in.queries | map({key: "\(.service)|\(.resource)|\(.broker // "")|\(.metric)|\(.stat)", value: ($byid[.id] // {ts: [], v: []})})
    | from_entries) as $s
 | def vals($svc; $res; $metric; $stat): ($s["\($svc)|\($res)||\($metric)|\($stat)"] // {v: []}).v;
-  def base($svc; $res): {area: "utilization", resource: "\($in.label)/\($svc)/\($res)", link: "", evidence: {}};
+  def base($svc; $res; $target): {area: "utilization", resource: "\($in.label)/\($svc)/\($res)", link: "", evidence: {},
+                                   svc: $svc, target: $target};
   def enough($v): ($v | length) >= 24;
   def window: "\($in.days) days";
 
@@ -39,8 +40,16 @@ def can_shrink: (size_down != null) or (burstable | not);
     | (if $sls then "ACUUtilization" else "CPUUtilization" end) as $m
     | vals("rds"; $id; $m; "Average") as $cpu | vals("rds"; $id; $m; "Maximum") as $cpu_max
     | vals("rds"; $id; "DatabaseConnections"; "Maximum") as $conns
-    | base("rds"; "\($id) (\($db.DBInstanceClass))") as $b
-    | ( if enough($conns) and ($conns | max) == 0 then
+    | base("rds"; "\($id) (\($db.DBInstanceClass))"; $id) as $b
+    | vals("rds"; $id; "FreeStorageSpace"; "Minimum") as $free_s
+    | ( {kind: "rds", account: $in.label, region: $in.region, name: $id, class: $db.DBInstanceClass, engine: $db.Engine,
+         multi_az: ($db.MultiAZ // false), serverless: $sls, cpu_avg: ($cpu | avg | r1), cpu_p95: ($cpu | p95 | r1),
+         cpu_max: ($cpu_max | max | r1), connections_max: ($conns | max), storage_gb: ($db.AllocatedStorage // null),
+         free_storage_pct: (if ($free_s | length) > 0 and ($db.AllocatedStorage // 0) > 0
+                            then (($free_s | min) / ($db.AllocatedStorage * 1073741824) * 100 | r1) else null end),
+         nodes: 1, price: {svc: "rds", region: $in.region, type: $db.DBInstanceClass, engine: $db.Engine,
+                           deploy: (if $db.MultiAZ then "Multi-AZ" else "Single-AZ" end)}} ),
+      ( if enough($conns) and ($conns | max) == 0 then
           $b + {check: "rds.idle", severity: "warning",
             message: "No connections to \($id) in \(window)",
             fix: "If nothing needs it, take a final snapshot and delete it. Stopping it only lasts 7 days before RDS starts it again.",
@@ -48,7 +57,7 @@ def can_shrink: (size_down != null) or (burstable | not);
         elif enough($cpu) and ($cpu | avg) < $t.cpu_low and ($cpu_max | p95) < $t.cpu_low_peak
              and ($sls or ($db.DBInstanceClass | can_shrink)) then
           ($db.DBInstanceClass | size_down) as $down
-          | $b + {check: (if $sls then "rds.acu_low" else "rds.oversized" end), severity: "info",
+          | $b + {check: (if $sls then "rds.acu_low" else "rds.oversized" end), severity: "info", down: $down,
             message: "\($id) averages \($cpu | avg | pct) \(if $sls then "of its max ACUs" else "CPU" end) and peaks around \($cpu_max | p95 | pct) over \(window)",
             fix: (if $sls then "Lower the minimum ACU so it can scale down when it's quiet."
                   elif $down then "Try one size down, \($down). Check FreeableMemory first: memory, not CPU, is often why a database is this size."
@@ -90,8 +99,12 @@ def can_shrink: (size_down != null) or (burstable | not);
     | vals("redshift"; $id; "CPUUtilization"; "Average") as $cpu | vals("redshift"; $id; "CPUUtilization"; "Maximum") as $cpu_max
     | vals("redshift"; $id; "PercentageDiskSpaceUsed"; "Maximum") as $disk
     | vals("redshift"; $id; "DatabaseConnections"; "Maximum") as $conns
-    | base("redshift"; "\($id) (\($c.NumberOfNodes) × \($c.NodeType))") as $b
-    | ( if enough($conns) and ($conns | max) == 0 then
+    | base("redshift"; "\($id) (\($c.NumberOfNodes) × \($c.NodeType))"; $id) as $b
+    | ( {kind: "redshift", account: $in.label, region: $in.region, name: $id, class: $c.NodeType, nodes: $c.NumberOfNodes,
+         cpu_avg: ($cpu | avg | r1), cpu_p95: ($cpu | p95 | r1), cpu_max: ($cpu_max | max | r1),
+         disk_used_max: ($disk | max | r1), connections_max: ($conns | max),
+         price: {svc: "redshift", region: $in.region, type: $c.NodeType}} ),
+      ( if enough($conns) and ($conns | max) == 0 then
           $b + {check: "redshift.idle", severity: "warning", message: "No connections to \($id) in \(window)",
             fix: "Pause it (you stop paying for compute) or, if it's unused, snapshot and delete it."}
         elif enough($cpu) and ($cpu | avg) < $t.cpu_low and ($cpu_max | p95) < $t.cpu_low_peak then
@@ -123,14 +136,18 @@ def can_shrink: (size_down != null) or (burstable | not);
     | ([$nodes[].mem[]] | max) as $mem_max
     | ([$nodes[].ev[]] | add // 0) as $evictions
     | ([$nodes[].conns[]]) as $conns
-    | base("elasticache"; "\($id) (\($nodes | length) × \($c.CacheNodeType))") as $b
-    | ( if enough($conns) and ($conns | max) == 0 then
+    | base("elasticache"; "\($id) (\($nodes | length) × \($c.CacheNodeType))"; $id) as $b
+    | ( {kind: "elasticache", account: $in.label, region: $in.region, name: $id, class: $c.CacheNodeType, engine: $c.Engine,
+         nodes: ($nodes | length), cpu_avg: ($cpu_avg | r1), cpu_p95: ($cpu_p95 | r1), memory_max: ($mem_max | r1),
+         evictions: $evictions, connections_max: ($conns | max),
+         price: {svc: "elasticache", region: $in.region, type: $c.CacheNodeType, engine: $c.Engine}} ),
+      ( if enough($conns) and ($conns | max) == 0 then
           $b + {check: "elasticache.idle", severity: "warning", message: "No client connections to \($id) in \(window)",
             fix: "If nothing uses it, delete it (take a backup first for Redis)."}
         elif ([$nodes[].cpu[]] | length) >= 24 and $cpu_avg < $t.cpu_low and ($mem_max == null or $mem_max < 30)
              and ($c.CacheNodeType | can_shrink) then
           ($c.CacheNodeType | size_down) as $down
-          | $b + {check: "elasticache.oversized", severity: "info",
+          | $b + {check: "elasticache.oversized", severity: "info", down: $down,
             message: "\($id) averages \($cpu_avg | pct) CPU" + (if $mem_max != null then " and peaks at \($mem_max | pct) memory" else "" end) + " over \(window)",
             fix: (if $down then "Try one size down, \($down)." else "A burstable cache.t4g node costs less for light use." end)}
         else empty end ),
@@ -157,16 +174,19 @@ def can_shrink: (size_down != null) or (burstable | not);
         | {broker: $bid,
            cpu: [[$u.ts, $u.v] | transpose[] | .[1] + ($ys[.[0]] // 0)],
            disk: (($s["msk|\($name)|\($bid)|KafkaDataLogsDiskUsed|Maximum"] // {v: []}).v)} ] as $brokers
-    | base("msk"; "\($name) (\($brokers | length) brokers)") as $b
+    | base("msk"; "\($name) (\($brokers | length) brokers)"; $name) as $b
     | ([$brokers[] | .cpu | p95 | select(. != null)] | max) as $cpu_p95
     | ([$brokers[].cpu[]] | avg) as $cpu_avg
     | ([$brokers[].disk[]] | max) as $disk
-    | ( if $cpu_p95 != null and $cpu_p95 > $t.msk_cpu_high then
+    | ( {kind: "msk", account: $in.label, region: $in.region, name: $name, class: ($k.instanceType // ""),
+         nodes: ($brokers | length), cpu_avg: ($cpu_avg | r1), cpu_p95: ($cpu_p95 | r1), disk_used_max: ($disk | r1),
+         price: {svc: "msk", region: $in.region, type: ($k.instanceType // "")}} ),
+      ( if $cpu_p95 != null and $cpu_p95 > $t.msk_cpu_high then
           $b + {check: "msk.cpu_high", severity: "warning",
             message: "\($name): the busiest broker's CPU p95 is \($cpu_p95 | pct) over \(window)",
             fix: "Add brokers or move up a broker size. AWS recommends staying under 60% so the cluster can absorb a broker failure."}
         elif ([$brokers[].cpu[]] | length) >= 24 and $cpu_avg < $t.cpu_low and $cpu_p95 < 25 then
-          $b + {check: "msk.oversized", severity: "info",
+          $b + {check: "msk.oversized", severity: "info", down: (($k.instanceType // "") | size_down),
             message: "\($name) brokers average \($cpu_avg | pct) CPU (busiest p95 \($cpu_p95 | pct)) over \(window)",
             fix: "A smaller broker size would likely do. Check partition counts and disk throughput before resizing."}
         else empty end ),

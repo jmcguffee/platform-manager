@@ -15,10 +15,10 @@ assess() {
   local queries
   queries=$(jq -c -f "$PMGR_JQ/utilization_queries.jq" <<<"$1")
   jq -cn --argjson q "$queries" --argjson v "$2" --argjson r "$1" --argjson t "$T" '
-    {resources: $r, queries: $q, days: 14, t: $t, label: "acct",
+    {resources: $r, queries: $q, days: 14, t: $t, label: "acct", region: "us-east-1",
      results: [$q[] | ($v["\(.metric)/\(.stat)/\(.resource)"] // $v["\(.metric)/\(.stat)"]) as $x | select($x != null)
                | {Id: .id, Timestamps: [range(336) | . * 3600 | todateiso8601], Values: [range(336) | $x]}]}' |
-    jq -c -f "$PMGR_JQ/utilization.jq"
+    jq -c -f "$PMGR_JQ/utilization.jq" | jq -c "${ROWS:-select(has(\"check\"))}"
 }
 
 rds() { jq -cn --arg id "$1" --arg class "$2" --arg engine "${3:-postgres}" --argjson extra "${4:-"{}"}" \
@@ -89,16 +89,17 @@ rds() { jq -cn --arg id "$1" --arg class "$2" --arg engine "${3:-postgres}" --ar
 @test "a resource with less than a day of data isn't judged oversized" {
   queries=$(jq -c -f "$PMGR_JQ/utilization_queries.jq" <<<"$(rds newdb db.r6g.2xlarge)")
   got=$(jq -cn --argjson q "$queries" --argjson r "$(rds newdb db.r6g.2xlarge)" --argjson t "$T" '
-    {resources: $r, queries: $q, days: 14, t: $t, label: "acct",
+    {resources: $r, queries: $q, days: 14, t: $t, label: "acct", region: "us-east-1",
      results: [$q[] | {Id: .id, Timestamps: [range(6) | . * 3600 | todateiso8601], Values: [range(6) | 3]}]}' |
-    jq -c -f "$PMGR_JQ/utilization.jq")
+    jq -c -f "$PMGR_JQ/utilization.jq" | jq -c 'select(has("check"))')
   [[ "$got" != *oversized* ]]
 }
 
 # --- EKS ---------------------------------------------------------------------------------
 
 eks() {
-  jq -c --arg cluster prod --argjson ignore '[]' -f "$PMGR_JQ/eks_utilization.jq"
+  jq -c --arg cluster prod --arg region us-east-1 --argjson ignore '[]' -f "$PMGR_JQ/eks_utilization.jq" |
+    jq -c "${ROWS:-select(has(\"check\"))}"
 }
 
 node() { jq -cn --arg n "$1" --arg cpu "$2" --arg mem "$3" '{metadata: {name: $n}, status: {allocatable: {cpu: $cpu, memory: $mem}}}'; }
@@ -155,4 +156,43 @@ $(podj loose-5d6e7f8a9-a loose-5d6e7f8a9 "" "")")
   [ "$(cat "$PMGR_TMP/unseen.txt")" = "shared: couldn't list Redshift" ]
   grep -q "cloudwatch get-metric-data --metric-data-queries file://" "$FAKE_DIR/calls"
   ! grep -qE $'\t(.* )?(create|delete|modify|put|update|start|stop)' "$FAKE_DIR/calls"
+}
+
+@test "metric rows carry each resource's numbers, and prices turn into monthly cost and savings" {
+  ROWS=. rows=$(assess "$(rds orders db.r6g.2xlarge postgres '{"MultiAZ": true}')" '{"CPUUtilization/Average": 4, "CPUUtilization/Maximum": 11,
+    "DatabaseConnections/Maximum": 30, "FreeableMemory/Minimum": 8e9, "FreeStorageSpace/Minimum": 6e10}' | jq -cs .)
+  m=$(jq -c '.[] | select(.kind == "rds")' <<<"$rows")
+  [ "$(jq -r '"\(.class) \(.multi_az) \(.cpu_avg) \(.connections_max) \(.free_storage_pct)"' <<<"$m")" = "db.r6g.2xlarge true 4 30 55.9" ]
+  [ "$(jq -r .price.deploy <<<"$m")" = Multi-AZ ]
+  prices='{"rds|us-east-1|db.r6g.2xlarge|postgres|Multi-AZ": 1.798, "rds|us-east-1|db.r6g.xlarge|postgres|Multi-AZ": 0.899}'
+  priced=$(jq -c --argjson prices "$prices" -f "$PMGR_JQ/cost_apply.jq" <<<"$rows")
+  [ "$(jq -r 'select(.kind == "rds") | .monthly_usd' <<<"$priced")" = 1312.54 ]
+  [ "$(jq -r 'select(.check == "rds.oversized") | .savings_usd_month' <<<"$priced")" = 656.27 ]
+}
+
+@test "an idle resource saves its whole cost; unknown prices stay unknown" {
+  ROWS=. rows=$(assess "$(rds ghost db.m6g.large)" '{"CPUUtilization/Average": 2, "CPUUtilization/Maximum": 3,
+    "DatabaseConnections/Maximum": 0, "FreeableMemory/Minimum": 4e9, "FreeStorageSpace/Minimum": 6e10}' | jq -cs .)
+  priced=$(jq -c --argjson prices '{"rds|us-east-1|db.m6g.large|postgres|Single-AZ": 0.152}' -f "$PMGR_JQ/cost_apply.jq" <<<"$rows")
+  [ "$(jq -r 'select(.check == "rds.idle") | .savings_usd_month' <<<"$priced")" = 110.96 ]
+  priced=$(jq -c --argjson prices '{}' -f "$PMGR_JQ/cost_apply.jq" <<<"$rows")
+  [ "$(jq -r 'select(.check == "rds.idle") | .savings_usd_month' <<<"$priced")" = null ]
+}
+
+@test "EKS: the cluster row is priced from on-demand nodes, and idle nodes become savings" {
+  n() { jq -cn --arg n "$1" --arg t "$2" --arg cap "$3" '{metadata: {name: $n, labels: {"node.kubernetes.io/instance-type": $t,
+    "topology.kubernetes.io/region": "us-east-1", "karpenter.sh/capacity-type": $cap}},
+    status: {allocatable: {cpu: "4", memory: "16Gi"}, nodeInfo: {kubeletVersion: "v1.33.4-eks-1234"}}}'; }
+  pm='{"items": []}'
+  nm='{"items": [{"metadata": {"name": "a"}, "usage": {"cpu": "100m", "memory": "1Gi"}}, {"metadata": {"name": "b"}, "usage": {"cpu": "3", "memory": "12Gi"}},
+                 {"metadata": {"name": "c"}, "usage": {"cpu": "3", "memory": "12Gi"}}]}'
+  rows=$(jq -n --argjson a "$(n a m6i.xlarge on-demand)" --argjson b "$(n b m6i.xlarge on-demand)" --argjson c "$(n c m6i.xlarge spot)" \
+    --argjson p "$(podj api-6b7c8d9f5-x api-6b7c8d9f5 3 12Gi)" --argjson pm "$pm" --argjson nm "$nm" \
+    '{nodes: {items: [$a, $b, $c]}, pods: {items: [$p]}, podmetrics: $pm, nodemetrics: $nm}' | ROWS=. eks | jq -cs .)
+  m=$(jq -c '.[] | select(.kind == "eks")' <<<"$rows")
+  [ "$(jq -r '"\(.nodes) \(.version) \(.node_types | length)"' <<<"$m")" = "3 v1.33.4 2" ]
+  priced=$(jq -c --argjson prices '{"ec2|us-east-1|m6i.xlarge||": 0.192}' -f "$PMGR_JQ/eks_cost.jq" <<<"$rows")
+  # Two on-demand nodes at $0.192/h plus the $73 control plane; the spot node isn't priced.
+  [ "$(jq -r 'select(.kind == "eks") | "\(.monthly_usd) \(.spot_nodes)"' <<<"$priced")" = "353.32 1" ]
+  [ "$(jq -r 'select(.check == "eks.idle_nodes") | .savings_usd_month' <<<"$priced")" = 140.16 ]
 }

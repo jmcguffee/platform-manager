@@ -33,12 +33,19 @@ def base($what): {area: "utilization", resource: "\($cluster)/eks/\($what)", lin
 | ($nodes | map(.status.allocatable.memory | mem) | add // 0) as $alloc_mem
 | ($live | map(.spec.containers[]?.resources.requests.cpu | cpu) | add // 0) as $req_cpu
 | ($live | map(.spec.containers[]?.resources.requests.memory | mem) | add // 0) as $req_mem
+| ($in.nodemetrics | items | map({key: .metadata.name, value: .usage}) | from_entries) as $nu
+| def ntype: .metadata.labels["node.kubernetes.io/instance-type"] // .metadata.labels["beta.kubernetes.io/instance-type"] // "unknown";
+  def spot: ((.metadata.labels["karpenter.sh/capacity-type"] // .metadata.labels["eks.amazonaws.com/capacityType"] // "") | ascii_downcase) == "spot";
+  def fargate: (.metadata.labels["eks.amazonaws.com/compute-type"] // "") == "fargate";
+  ([ $nodes[] | . as $n | ($nu[.metadata.name] // null) as $u | select($has_metrics and $u != null)
+     | select(pctof($u.cpu | cpu; $n.status.allocatable.cpu | cpu) < 10 and pctof($u.memory | mem; $n.status.allocatable.memory | mem) < 30)
+     | .metadata.name ]) as $idle
 
 | (
   # Requests against capacity, cluster-wide.
   ( select(($nodes | length) >= 2 and $alloc_cpu > 0)
     | if pctof($req_cpu; $alloc_cpu) < 40 and pctof($req_mem; $alloc_mem) < 40 then
-        base("nodes") + {check: "eks.overprovisioned", severity: "info",
+        base("nodes") + {check: "eks.overprovisioned", severity: "info", svc: "eks", target: $cluster,
           message: "Pods request \(pctof($req_cpu; $alloc_cpu))% of CPU and \(pctof($req_mem; $alloc_mem))% of memory across \($nodes | length) nodes (\($alloc_cpu | cores), \($alloc_mem | bytes))",
           fix: "The nodes are mostly empty. With Karpenter, use consolidationPolicy WhenEmptyOrUnderutilized; with managed node groups, lower the minimum size.",
           evidence: {requests_cpu_pct: pctof($req_cpu; $alloc_cpu), requests_mem_pct: pctof($req_mem; $alloc_mem)}}
@@ -87,14 +94,21 @@ def base($what): {area: "utilization", resource: "\($cluster)/eks/\($what)", lin
         fix: "It's close to being OOM-killed. Raise the memory limit, or find what's growing."} ),
 
   # With metrics-server: nodes doing almost nothing.
-  ( select($has_metrics and ($nodes | length) >= 2)
-    | ($in.nodemetrics | items | map({key: .metadata.name, value: .usage}) | from_entries) as $nu
-    | [ $nodes[] | . as $n | ($nu[.metadata.name] // null) as $u | select($u != null)
-        | select(pctof($u.cpu | cpu; $n.status.allocatable.cpu | cpu) < 10 and pctof($u.memory | mem; $n.status.allocatable.memory | mem) < 30)
-        | .metadata.name ] as $idle
-    | select(($idle | length) > 0)
-    | base("nodes") + {check: "eks.idle_nodes", severity: "info",
+  ( select($has_metrics and ($nodes | length) >= 2 and ($idle | length) > 0)
+    | base("nodes") + {check: "eks.idle_nodes", severity: "info", svc: "eks", target: $cluster,
         message: "\($idle | length) of \($nodes | length) nodes are under 10% CPU and 30% memory right now: \($idle[:5] | join(", "))",
         fix: "If this holds at busy times too, let the autoscaler consolidate them (Karpenter consolidation, or a lower node group minimum).",
-        evidence: {nodes: $idle}} )
+        evidence: {nodes: $idle}} ),
+
+  # The cluster's numbers for the metrics table (priced afterwards from EC2 list prices).
+  ( {kind: "eks", name: $cluster, nodes: ($nodes | length), pods: ($live | length),
+     version: ([$nodes[].status.nodeInfo.kubeletVersion // empty | sub("-eks.*"; "")] | unique | join(", ")),
+     node_types: ([$nodes[] | select(fargate | not) | {type: ntype, region: (.metadata.labels["topology.kubernetes.io/region"] // $region), spot: spot}]
+                  | group_by([.type, .region, .spot]) | map(.[0] + {count: length})),
+     node_type_of: ([$nodes[] | {key: .metadata.name, value: {type: ntype, region: (.metadata.labels["topology.kubernetes.io/region"] // $region), spot: spot}}] | from_entries),
+     cpu: ($alloc_cpu * 10 | round / 10), memory_gib: ($alloc_mem / 1073741824 | round),
+     requests_cpu_pct: pctof($req_cpu; $alloc_cpu), requests_mem_pct: pctof($req_mem; $alloc_mem),
+     usage_cpu_pct: (if $has_metrics then pctof([$nu[] | .cpu | cpu] | add // 0; $alloc_cpu) else null end),
+     usage_mem_pct: (if $has_metrics then pctof([$nu[] | .memory | mem] | add // 0; $alloc_mem) else null end),
+     idle_nodes: $idle} )
 )
