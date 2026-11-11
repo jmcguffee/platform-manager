@@ -19,6 +19,7 @@ Health
   argo [CLUSTER...]       Argo CD Application health on each reachable cluster
   utilization             Over- and under-used RDS, Redshift, ElastiCache, MSK and EKS capacity
   oncall                  Datadog: open pages, active incidents, alerting monitors (needs Pup)
+  security                Internet exposure by environment: security groups, load balancers, public services
   pipelines [--repo R]    Pipeline failures, flakiness, slowness, and workflow gaps
   doctor                  Everything above
   ui [--file]             Open the dashboard, with a Sync now button (--file: a static page)
@@ -51,7 +52,7 @@ sweep() {
     while IFS= read -r c; do [ -n "$c" ] && clusters_filter+=("$c"); done <<<"$SWEEP_CLUSTERS"
   fi
 
-  case $areas in *" access "* | *" argo "* | *" workloads "* | *" utilization "*)
+  case $areas in *" access "* | *" argo "* | *" workloads "* | *" utilization "* | *" security "*)
     access_sweep ${clusters_filter[@]+"${clusters_filter[@]}"} >"$PMGR_TMP/access.jsonl"
     case $areas in *" access "*) cat "$PMGR_TMP/access.jsonl" >>"$PMGR_TMP/findings.jsonl" ;; esac
     ;;
@@ -60,11 +61,12 @@ sweep() {
   case $areas in *" argo "*) argo_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" utilization "*) utilization_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" oncall "*) oncall_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
+  case $areas in *" security "*) security_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" pipelines "* | *" workflows "*) github_sweep "$@" >>"$PMGR_TMP/findings.jsonl" ;; esac
   # Keep access findings but drop the cluster rows when access wasn't asked for.
   case $areas in *" access "*) ;; *)
-    case $areas in *" argo "* | *" workloads "* | *" utilization "*) ;; *) printf '[]' >"$PMGR_TMP/clusters.json" ;; esac
-    case $areas in *" utilization "*) ;; *) printf '[]' >"$PMGR_TMP/accounts.json" ;; esac
+    case $areas in *" argo "* | *" workloads "* | *" utilization "* | *" security "*) ;; *) printf '[]' >"$PMGR_TMP/clusters.json" ;; esac
+    case $areas in *" utilization "* | *" security "*) ;; *) printf '[]' >"$PMGR_TMP/accounts.json" ;; esac
     ;;
   esac
 }
@@ -242,7 +244,7 @@ cmd_ui() {
   mkdir -p "$dir" && chmod 700 "$dir"
   file="$dir/dashboard.html"
   printf 'Checking your platform...\n' >&2
-  sweep access workloads utilization oncall argo pipelines workflows
+  sweep access security workloads utilization oncall argo pipelines workflows
   local code=0
   emit html "$file" 0 2>/dev/null || code=$?
   chmod 600 "$file"
@@ -321,15 +323,16 @@ main() {
     workloads) cmd_report "workloads" "$@" ;;
     utilization) cmd_report "utilization" --all "$@" ;;
     oncall) cmd_report "oncall" --all "$@" ;;
+    security) cmd_report "security" --all "$@" ;;
     pipelines) cmd_report "pipelines workflows" "$@" ;;
-    doctor) cmd_report "access workloads utilization oncall argo pipelines workflows" "$@" ;;
+    doctor) cmd_report "access security workloads utilization oncall argo pipelines workflows" "$@" ;;
     use) cmd_use "$@" ;;
     env) cmd_env "$@" ;;
     login) cmd_login "$@" ;;
     jit) cmd_jit "$@" ;;
     ui) cmd_ui "$@" ;;
     __render) # internal: one full sweep rendered as the live dashboard (used by the ui server)
-      sweep access workloads utilization oncall argo pipelines workflows
+      sweep access security workloads utilization oncall argo pipelines workflows
       report=$(report_build)
       report_html "$report" live >"${1:?}"
       [ -z "${2:-}" ] || printf '%s\n' "$report" >"$2"

@@ -8,6 +8,14 @@ tells you the fix. `pmgr ui` shows everything as a dashboard in your browser.
   can't, it says why: an expired SSO session (one finding per session, not per
   profile), a role not activated in Azure PIM or not assigned in IAM Identity
   Center, VPN, a missing EKS access entry, or a cluster that no longer exists.
+- **Security:** Internet exposure judged by environment, for private-VPC estates where
+  `0.0.0.0/0` belongs only on the production internet-facing load balancer: security groups open
+  to `0.0.0.0/0` or `::/0` (an error outside prd, and in prd unless the group is on the public
+  load balancer and only on web ports), internet-facing load balancers outside prd, publicly
+  accessible RDS and Redshift, MSK with public access, EKS API endpoints open to `0.0.0.0/0`,
+  instances with public IPs outside prd, and S3 Block Public Access not fully on. The
+  environment comes from a tag you choose (falling back to the VPC's tag, then a per-account
+  setting), and deliberate exceptions go in `security.allowed_public`.
 - **Clusters:** `pmgr use` switches kubectl contexts only after the target passes
   its checks.
 - **Workloads:** Crash-looping or OOM-killed pods, image pull and missing-config errors, pods stuck
@@ -119,6 +127,7 @@ pmgr jit prod               # open the Azure PIM activation page
 pmgr workloads              # pods, nodes, controllers and Warning events
 pmgr utilization            # over- and under-used databases, caches, Kafka and EKS capacity
 pmgr oncall                 # Datadog pages, incidents and alerting monitors
+pmgr security               # internet exposure by environment
 pmgr argo                   # Argo CD health on every reachable cluster
 pmgr pipelines              # pipeline failures and workflow gaps
 pmgr doctor                 # everything, in the terminal
@@ -143,6 +152,7 @@ Press Ctrl+C in the terminal to stop it. The views:
 - **Overview:** one sentence about what needs you, then an access chain for each cluster
   (AWS session, Kubernetes, workloads, Argo CD), what to fix first, and where CI time goes.
 - **Access:** the chains and every access finding.
+- **Security:** everything reachable from the internet, allowed or flagged, by environment.
 - **Workloads:** problems by cluster and namespace, filterable.
 - **Utilization:** over- and under-used resources by account and service.
 - **Pipelines:** each repo's CI minutes and pipeline findings.

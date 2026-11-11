@@ -44,6 +44,15 @@ utilization:
   memory_high: 80       # ElastiCache memory used %
   regions: {}           # region per profile when ~/.aws/config doesn't set one, e.g. {prod-platform: us-east-2}
 
+security:
+  # Which tag says what environment a resource is in. Resources without it fall back to their VPC's
+  # tag, then to account_environments.
+  environment_tag: Environment          # e.g. values dev, rc, uat, prd
+  public_environments: [prd]            # the only place internet-facing load balancers belong
+  web_ports: [80, 443]                  # ports the public load balancer may open to 0.0.0.0/0
+  account_environments: {}              # per profile, when resources aren't tagged, e.g. {prod-platform: prd}
+  allowed_public: []                    # deliberate exceptions: security group IDs, LB names, resource IDs
+
 cost:
   # GitHub Actions rate for private repos, used to estimate CI cost (Linux 2-core list price).
   actions_usd_per_minute: 0.008

@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "oncall", "access", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
-const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
+const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
@@ -638,6 +638,47 @@ function oncall() {
   return out;
 }
 
+function security() {
+  const rows = metrics("exposure");
+  const list = inView("security");
+  const checked = sources().filter((x) => x.type === "security");
+  if (!checked.length) {
+    return [lede("No accounts checked.", "", "The security check runs on every AWS account with a working session. Sign in (Access view), then sync.")];
+  }
+  const flagged = rows.filter((x) => !x.allowed);
+  const c = counts(list);
+  const envs = [...new Set(rows.map((x) => x.env || "untagged"))];
+  const container = h("div");
+  const draw = () => {
+    const shown = list.filter(passes);
+    container.replaceChildren(...(shown.length
+      ? grouped(shown, (f) => f.resource.split("/").slice(0, 2).join(" › "), () => true)
+      : [h("p", { class: "empty" }, list.length ? "No findings match these filters." : "No exposure findings.")]));
+  };
+  draw();
+  return [
+    lede(c.critical + c.error ? `${plural(c.critical + c.error, "exposure needs", "exposures need")} closing.` : flagged.length || c.warning ? "Nothing is wide open." : "Only the public load balancer faces the internet.",
+      c.critical + c.error ? "bad" : "",
+      "Private VPCs everywhere; 0.0.0.0/0 belongs only on the production internet-facing load balancer, on web ports."),
+    stats([["Reachable from the internet", num(rows.length)], ["Allowed", num(rows.length - flagged.length)],
+           ["Flagged", num(flagged.length), flagged.length ? "bad" : ""], ["Errors", num(c.critical + c.error), c.critical + c.error ? "bad" : ""],
+           ["Warnings", num(c.warning), c.warning ? "warn" : ""], ["Environments seen", envs.length ? envs.join(", ") : "–"]]),
+    sourceProblems("security"),
+    h("h2", {}, "Internet-reachable", h("span", { class: "tally" }, `${plural(rows.length, "resource", "resources")} across ${plural(checked.length, "account", "accounts")}`)),
+    rows.length
+      ? table([["Resource"], ["Type"], ["Environment"], ["Open to"], ["Account"], ["Status"]],
+          [...rows].sort((a, b) => a.allowed - b.allowed).map((x) => h("tr", { class: x.allowed ? "" : "row-bad" },
+            h("td", {}, h("b", { class: "mono" }, x.id), x.name && x.name !== x.id ? h("small", { class: "muted" }, ` ${x.name}`) : null),
+            h("td", {}, x.type), h("td", {}, x.env || h("span", { class: "muted" }, "untagged")), h("td", {}, x.detail),
+            h("td", {}, `${x.account} (${x.region})`),
+            h("td", {}, h("span", { class: `chip-s ${x.allowed ? "ok" : "bad"}` }, x.allowed ? "Allowed" : "Flagged")))))
+      : h("p", { class: "empty" }, "Nothing is reachable from the internet in the accounts checked."),
+    h("h2", {}, "Findings"),
+    filters(draw, "Filter by account, group or resource"),
+    container,
+  ];
+}
+
 function access() {
   const list = inView("access").sort(bySeverity);
   return [
@@ -798,7 +839,7 @@ function pipelines() {
 function sourcesView() {
   const all = sources();
   const bad = all.filter((s) => !s.ok);
-  const label = { cluster: "Cluster", account: "AWS account", repo: "Repo", datadog: "Datadog" };
+  const label = { cluster: "Cluster", account: "AWS account", repo: "Repo", datadog: "Datadog", security: "Security check" };
   return [
     h("h2", { class: `verdict${bad.length ? " bad" : ""}` }, bad.length ? `pmgr couldn't read ${plural(bad.length, "source", "sources")}.` : "pmgr could read everything."),
     h("p", { class: "verdict-sub" }, "What each check tried to read and what happened. When something is missing from another view, the reason is here."),
@@ -856,12 +897,12 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, oncall, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, oncall, access, security, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 const NAV = [
   ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
-  ["Infrastructure", [["access", "Access"], ["workloads", "Workloads"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
+  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
   ["System", [["sources", "Sources"]]],
 ];
