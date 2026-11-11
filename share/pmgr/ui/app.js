@@ -52,7 +52,9 @@ async function api(path, method = "GET") {
 }
 
 async function sync() {
+  if (app.syncing || !app.live) return;
   app.syncing = true;
+  app.syncStarted = Date.now();
   app.syncError = "";
   renderSync();
   try {
@@ -81,9 +83,15 @@ async function sync() {
 }
 
 function renderSync() {
-  const slot = document.querySelector(".again");
-  if (!slot || !app.live) return;
-  const button = h("button", { type: "button", class: "sync", disabled: app.syncing }, app.syncing ? "Syncing…" : "Sync now");
+  const slot = document.getElementById("again");
+  if (!slot) return;
+  if (!app.live) {
+    slot.replaceChildren("Run ", h("code", {}, "pmgr ui"), " to refresh");
+    return;
+  }
+  const secs = app.syncing ? Math.round((Date.now() - app.syncStarted) / 1000) : 0;
+  const button = h("button", { type: "button", class: app.syncing ? "" : "primary", disabled: app.syncing, title: "Sync now (r)" },
+    app.syncing ? [h("span", { class: "spin", "aria-hidden": "true" }), `Syncing… ${secs}s`] : "Sync now");
   button.addEventListener("click", sync);
   slot.replaceChildren(button);
   const banner = document.getElementById("sync-error");
@@ -101,7 +109,7 @@ function h(tag, attrs, ...kids) {
     if (k === "class") el.className = v;
     else el.setAttribute(k, v === true ? "" : v);
   }
-  for (const kid of kids.flat()) {
+  for (const kid of kids.flat(Infinity)) {
     if (kid == null || kid === false) continue;
     el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
   }
@@ -158,15 +166,14 @@ function findingRow(f) {
   return h(
     "li",
     { class: `finding ${f.severity}` },
-    h("span", { class: "edge", "aria-hidden": "true" }),
-    h(
-      "div",
-      {},
-      f.savings_usd_month ? h("p", { class: "save" }, `${f.savings_note === "up to" ? "Save up to" : "Save about"} ${usd(f.savings_usd_month)}/month`, h("span", { class: "muted" }, " at list price")) : null,
-      h("p", { class: "what" }, h("span", { class: "sev" }, SEV_LABEL[f.severity]), h("span", { class: "where" }, f.resource), ": ", richText(f.message, false)),
-      f.fix ? h("p", { class: "fix" }, richText(f.fix)) : null,
-      f.link ? h("p", { class: "ref" }, h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, linkLabel(f))) : null,
-    ),
+    h("div", { class: "f-head" },
+      h("span", { class: "sev" }, SEV_LABEL[f.severity]),
+      h("span", { class: "where" }, f.resource),
+      f.savings_usd_month ? h("span", { class: "save", title: "At on-demand list price" },
+        `${f.savings_note === "up to" ? "up to " : ""}${usd(f.savings_usd_month)}/mo`) : null),
+    h("p", { class: "what" }, richText(f.message, false)),
+    f.fix ? h("p", { class: "fix" }, richText(f.fix)) : null,
+    f.link ? h("p", { class: "ref" }, h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, `${linkLabel(f)} ↗`)) : null,
   );
 }
 
@@ -362,13 +369,56 @@ function statusChip(last) {
   const chip = h("span", { class: `chip-s ${kind}` }, label);
   return last.url ? h("a", { href: last.url, target: "_blank", rel: "noopener noreferrer", class: "plain" }, chip, ` ${ago(last.at)}`) : [chip, ` ${ago(last.at)}`];
 }
+// Sort value for a cell: data-sort if set, else a number read from the text ($, %, 6m, 1.2h), else the text.
+function cellValue(td, numeric) {
+  if (!td) return "";
+  if (td.dataset.sort != null) return Number(td.dataset.sort);
+  const t = td.textContent.trim();
+  if (!numeric) return t.toLowerCase();
+  if (t === "–" || t === "") return -Infinity;
+  const d = t.match(/^([\d.]+)\s*(s|m|h|d)\b/);
+  if (d) return Number(d[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[d[2]];
+  const n = Number(t.replace(/[$,%]|\/mo/g, "").split(" ")[0]);
+  return Number.isNaN(n) ? -Infinity : n;
+}
 function table(headers, rows) {
-  return h("div", { class: "table-wrap" }, h("table", { class: "data" },
-    h("thead", {}, h("tr", {}, headers.map(([label, numeric]) => h("th", { class: numeric ? "n" : "" }, label)))),
-    h("tbody", {}, rows)));
+  const tbody = h("tbody", {}, rows);
+  const ths = headers.map(([label, numeric], i) => {
+    const th = h("th", { class: `${numeric ? "n" : ""} ${label ? "sortable" : ""}`, scope: "col", tabindex: label ? "0" : null }, label);
+    if (!label) return th;
+    const sortBy = () => {
+      const dir = th.getAttribute("aria-sort") === "descending" ? "ascending" : "descending";
+      for (const other of ths) other.removeAttribute("aria-sort");
+      th.setAttribute("aria-sort", dir);
+      const sign = dir === "ascending" ? 1 : -1;
+      [...tbody.rows].sort((a, b) => {
+        const x = cellValue(a.cells[i], numeric), y = cellValue(b.cells[i], numeric);
+        return (x > y ? 1 : x < y ? -1 : 0) * sign;
+      }).forEach((r) => tbody.append(r));
+    };
+    th.addEventListener("click", sortBy);
+    th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sortBy(); } });
+    return th;
+  });
+  return h("div", { class: "table-wrap" }, h("table", { class: "data" }, h("thead", {}, h("tr", {}, ths)), tbody));
+}
+// A small inline bar for a 0–100 value.
+function bar(v, high) {
+  if (v == null) return null;
+  const tone = high != null && v >= high ? "bad" : high != null && v >= high * 0.85 ? "warn" : "";
+  return h("span", { class: `bar ${tone}`, "aria-hidden": "true" }, h("i", { style: `width:${Math.max(2, Math.min(100, v))}%` }));
 }
 function stats(items) {
-  return h("dl", { class: "stats" }, items.map(([label, value, tone]) => h("div", { class: tone || "" }, h("dt", {}, label), h("dd", {}, value))));
+  return h("dl", { class: "stats" }, items.map(([label, value, tone, href]) => h("div", { class: tone || "" },
+    href ? h("a", { href }, h("dt", {}, label), h("dd", {}, value)) : [h("dt", {}, label), h("dd", {}, value)])));
+}
+function panel(title, href, body, note) {
+  return h("section", { class: "panel" },
+    h("div", { class: "panel-head" }, h("h3", {}, title), note ? h("span", { class: "tally" }, note) : null, href ? h("a", { href }, "Open") : null),
+    h("div", { class: "panel-body" }, body));
+}
+function lede(text, tone, sub) {
+  return h("div", { class: "lede" }, h("h2", { class: `verdict${tone ? ` ${tone}` : ""}` }, text), sub ? h("p", { class: "verdict-sub" }, sub) : null);
 }
 function sourceProblems(type) {
   const bad = sources().filter((s) => s.type === type && !s.ok);
@@ -383,50 +433,43 @@ function overview() {
   const all = findings();
   const c = counts(all);
   const bad = c.critical + c.error;
-  let verdict;
-  let sub;
-  let cls = "verdict";
-  if (bad) {
-    verdict = `${plural(bad, "problem needs", "problems need")} you.`;
-    cls += " bad";
-    sub = `Start with these. There are also ${plural(c.warning, "warning", "warnings")} and ${plural(c.info, "suggestion", "suggestions")}.`;
-  } else if (c.warning) {
-    verdict = "Nothing is broken.";
-    sub = `${plural(c.warning, "thing", "things")} could be better, plus ${plural(c.info, "suggestion", "suggestions")}.`;
-  } else {
-    verdict = "Everything checks out.";
-    sub = c.info ? `${plural(c.info, "suggestion", "suggestions")} if you have time.` : "No findings in this check.";
-  }
+  const verdict = bad ? `${plural(bad, "problem needs", "problems need")} you.` : c.warning ? "Nothing is broken." : "Everything checks out.";
+  const sub = bad ? `Plus ${plural(c.warning, "warning", "warnings")} and ${plural(c.info, "suggestion", "suggestions")}.`
+    : c.warning ? `${plural(c.warning, "thing", "things")} could be better.` : c.info ? `${plural(c.info, "suggestion", "suggestions")} if you have time.` : "";
   const urgent = all.filter((f) => f.severity !== "info").sort(bySeverity);
-  const usage = Object.entries(app.report.usage_minutes || {})
-    .flatMap(([repo, rows]) => Object.entries(rows).map(([name, mins]) => [`${repo} › ${name}`, mins]))
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6);
-  const days = app.report.settings ? app.report.settings.lookback_days : null;
   const saving = savingsTotal(all);
+  const savers = all.filter((f) => f.savings_usd_month > 0).sort((a, b) => b.savings_usd_month - a.savings_usd_month);
+  const dd = sources().some((x) => x.type === "datadog");
+  const now = shiftsNow();
+  const wfs = metrics("workflow");
+  const worst = wfs.filter((w) => w.success_rate != null && w.runs >= 3).sort((a, b) => a.success_rate - b.success_rate).slice(0, 5);
+  const busiest = [...wfs].sort((a, b) => b.minutes - a.minutes).slice(0, 5);
+  const unread = sources().filter((x) => !x.ok).length;
+
+  const right = [];
+  if (dd && metrics("shift").length) {
+    const mine = now.filter(isMine);
+    right.push(panel("On call now", "#oncall", (mine.length ? mine : now).length
+      ? h("dl", { class: "kv" }, (mine.length ? mine : now).map((x) => [h("dt", {}, h("b", {}, x.name), h("span", { class: "muted" }, ` ${x.schedule}`)), h("dd", { class: "muted" }, `until ${when(x.end)}`)]))
+      : h("p", { class: "empty" }, "Nobody on call right now.")));
+  }
+  if (savers.length) right.push(panel("Top savings", "#actions", h("dl", { class: "kv" }, savers.slice(0, 5).map((f) => [h("dt", { title: f.resource }, f.resource.split("/").slice(1).join("/")), h("dd", { class: "save" }, `${usd(f.savings_usd_month)}/mo`)])), `${usd(saving)}/mo`));
+  if (worst.length) right.push(panel("Least reliable pipelines", "#pipelines", h("dl", { class: "kv" }, worst.map((w) => [h("dt", { title: `${w.repo} › ${w.workflow}` }, `${w.repo} › ${w.workflow}`), h("dd", { class: w.success_rate < 0.7 ? "bad" : w.success_rate < 0.9 ? "warn" : "" }, pctText(w.success_rate))]))));
+  if (busiest.length) right.push(panel("Where CI time goes", "#pipelines", h("dl", { class: "kv" }, busiest.map((w) => [h("dt", { title: `${w.repo} › ${w.workflow}` }, `${w.repo} › ${w.workflow}`), h("dd", {}, `${num(w.minutes)} min`)])), `${usd(ciCost())} / 30 days`));
+  if (unread) right.push(panel("Couldn't read", "#sources", h("p", { class: "muted" }, `${plural(unread, "source", "sources")} couldn't be read, so they have no findings. See why in Sources.`)));
+
   return [
-    h("h1", { class: cls }, verdict),
-    h("p", { class: "verdict-sub" }, sub),
-    stats([["Fix now", num(bad), bad ? "bad" : ""], ["This week", num(c.warning), c.warning ? "warn" : ""],
-           ["Potential savings", `${usd(saving)}/mo`, saving ? "save" : ""], ["Spend tracked", `${usd(spendTracked())}/mo`],
-           ["CI success", pctText(ciSuccess())],
-           ...(sources().some((x) => x.type === "datadog")
-             ? [["Open pages", num(metrics("page").filter((x) => !["resolved", "closed"].includes(x.status)).length)],
-                ...(metrics("shift").length ? [["On call now", (shiftsNow().filter(isMine)[0] || shiftsNow()[0] || { name: "Nobody" }).name]] : [])] : [])]),
-    saving || bad ? h("p", { class: "more" }, h("a", { href: "#actions" }, "See every action item")) : null,
-    h("h2", {}, "Access"),
-    chains(),
-    h("h2", {}, urgent.length ? "What to fix first" : "Findings"),
-    urgent.length ? findingList(urgent, 8) : h("p", { class: "empty" }, "No errors or warnings."),
-    urgent.length > 8 ? h("p", { class: "more" }, `${urgent.length - 8} more in the other views.`) : null,
-    usage.length
-      ? [
-          h("h2", {}, "Where CI time goes"),
-          h("p", { class: "section-note" }, `Approximate runner minutes${days ? ` over the last ${days} days` : ""}, largest first.`),
-          usageBars(usage),
-        ]
-      : null,
-    unseenNote(),
+    lede(verdict, bad ? "bad" : "", sub),
+    stats([["Fix now", num(bad), bad ? "bad" : "", "#actions"], ["This week", num(c.warning), c.warning ? "warn" : "", "#actions"],
+           ["Potential savings", `${usd(saving)}/mo`, saving ? "save" : "", "#actions"], ["Spend tracked", `${usd(spendTracked())}/mo`, "", "#utilization"],
+           ["CI success", pctText(ciSuccess()), "", "#pipelines"],
+           ...(dd ? [["On call now", (now.filter(isMine)[0] || now[0] || { name: "–" }).name, "", "#oncall"]] : [])]),
+    h("div", { class: "board" },
+      h("div", {},
+        panel("Needs you", "#actions", urgent.length ? findingList(urgent, 6) : h("p", { class: "empty" }, "No errors or warnings."),
+          urgent.length > 6 ? `${urgent.length - 6} more` : null),
+        h("h2", {}, "Access"), chains()),
+      h("div", {}, right)),
   ];
 }
 
@@ -474,7 +517,7 @@ function actions() {
   const verdict = now.items.length ? `${plural(now.items.length, "thing needs", "things need")} fixing now.`
     : save.items.length ? `You could save about ${usd(savingsTotal(save.items))} a month.` : week.items.length ? "Nothing urgent." : "Nothing to do.";
   return [
-    h("h1", { class: `verdict${now.items.length ? " bad" : ""}` }, verdict),
+    h("h2", { class: `verdict${now.items.length ? " bad" : ""}` }, verdict),
     h("p", { class: "verdict-sub" }, "Every finding as a to-do, in the order worth doing them. Copy the list into a ticket or a message."),
     stats([["Fix now", num(now.items.length), now.items.length ? "bad" : ""], ["Save money", `${usd(savingsTotal(save.items))}/mo`, save.items.length ? "save" : ""],
            ["This week", num(week.items.length), week.items.length ? "warn" : ""], ["Hygiene", num(groups[3].items.length)]]),
@@ -550,7 +593,7 @@ function whoIsOnCall() {
 function oncall() {
   const src = sources().find((x) => x.type === "datadog");
   if (!src) {
-    return [h("h1", { class: "verdict" }, "Datadog isn't set up."),
+    return [h("h2", { class: "verdict" }, "Datadog isn't set up."),
       h("p", { class: "verdict-sub" }, "Add a datadog section to ~/.config/platform-manager/config.yaml with your site, install Pup (brew install datadog-labs/pack/pup), run pup auth login, then sync.")];
   }
   const pages = metrics("page").filter((x) => !["resolved", "closed"].includes(x.status));
@@ -561,7 +604,7 @@ function oncall() {
   const auth = findings().find((f) => f.check === "datadog.auth" || f.check === "datadog.no_cli" || f.check === "datadog.unreachable");
   const linkTo = (url, text) => h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, text);
   const out = [
-    h("h1", { class: `verdict${unacked.length || alerting.length || auth ? " bad" : ""}` },
+    h("h2", { class: `verdict${unacked.length || alerting.length || auth ? " bad" : ""}` },
       auth ? "Pup can't read Datadog." : unacked.length ? `${plural(unacked.length, "page needs", "pages need")} acknowledging.`
         : alerting.length ? `${plural(alerting.length, "monitor is", "monitors are")} alerting.` : incidents.length ? "Pages are handled." : "All quiet."),
     h("p", { class: "verdict-sub" }, `Datadog on ${src.name}: open pages, active incidents and alerting monitors, read-only through Pup.`),
@@ -598,7 +641,7 @@ function oncall() {
 function access() {
   const list = inView("access").sort(bySeverity);
   return [
-    h("h1", { class: "verdict" }, hasErrors(list) ? "Some access is broken." : "Access is working."),
+    h("h2", { class: "verdict" }, hasErrors(list) ? "Some access is broken." : "Access is working."),
     h("p", { class: "verdict-sub" }, "Each row follows the path a command takes: your AWS session, then the cluster's API, then what runs on it."),
     chains(),
     h("h2", {}, "Findings"),
@@ -610,7 +653,7 @@ function workloads() {
   const reachable = (app.report.clusters || []).filter((c) => c.kubernetes === "ok");
   if (!reachable.length) {
     return [
-      h("h1", { class: "verdict" }, "No cluster to read."),
+      h("h2", { class: "verdict" }, "No cluster to read."),
       h("p", { class: "verdict-sub" }, "pmgr reads workloads and events from clusters it can reach, and none are reachable right now. The Access view shows what's in the way."),
     ];
   }
@@ -629,7 +672,7 @@ function workloads() {
   draw();
   const all = inView("workloads");
   return [
-    h("h1", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, hasErrors(all) ? "Some workloads are failing." : all.length ? "Workloads are running." : "Workloads are healthy."),
+    h("h2", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, hasErrors(all) ? "Some workloads are failing." : all.length ? "Workloads are running." : "Workloads are healthy."),
     h("p", { class: "verdict-sub" }, `Pods, controllers, nodes, volumes and jobs on ${reachable.map((c) => c.name).join(", ")}, plus Warning events from the last hour that status alone doesn't explain.`),
     filters(draw, "Filter by namespace, workload or text"),
     container,
@@ -693,7 +736,7 @@ function utilization() {
   if (roomy) parts.push(plural(roomy, "could be smaller", "could be smaller"));
   const days = app.report.settings && app.report.settings.utilization_days;
   return [
-    h("h1", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, parts.length ? `${parts[0][0].toUpperCase()}${parts[0].slice(1)}.` : "Capacity looks right."),
+    h("h2", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, parts.length ? `${parts[0][0].toUpperCase()}${parts[0].slice(1)}.` : "Capacity looks right."),
     h("p", { class: "verdict-sub" }, (parts.length > 1 ? `Also, ${parts.slice(1).join(" and ")}. ` : "")
       + `RDS, Redshift, ElastiCache and MSK are judged on ${days || 14} days of CloudWatch metrics; EKS on requests, capacity and current usage.`),
     stats([["Monthly cost", `${usd(monthly)}/mo`], ["Potential savings", `${usd(savingAll)}/mo`, savingAll ? "save" : ""],
@@ -710,7 +753,7 @@ function utilization() {
 // A percent cell, colored when it's high (or, with a low mark, low).
 function pcell(v, high, low) {
   const cls = v == null ? "" : high != null && v >= high ? "warn" : low != null && v < low ? "muted" : "";
-  return h("td", { class: `n ${cls}` }, v == null ? "–" : `${v}%`);
+  return h("td", { class: `n ${cls}`, "data-sort": v == null ? -1 : v }, v == null ? "–" : `${v}%`, bar(v, high));
 }
 
 function pipelines() {
@@ -719,7 +762,7 @@ function pipelines() {
   const days = app.report.settings ? app.report.settings.lookback_days : 14;
   const repos = app.report.settings && app.report.settings.repos.length ? app.report.settings.repos.map((r) => r.name) : [...new Set(wfs.map((w) => w.repo))];
   if (!repos.length) {
-    return [h("h1", { class: "verdict" }, "No repos configured."), h("p", { class: "verdict-sub" }, "List your repos under github.repos in ~/.config/platform-manager/config.yaml, then sync.")];
+    return [h("h2", { class: "verdict" }, "No repos configured."), h("p", { class: "verdict-sub" }, "List your repos under github.repos in ~/.config/platform-manager/config.yaml, then sync.")];
   }
   const runs = wfs.reduce((a, w) => a + w.runs, 0);
   const counted = wfs.filter((w) => w.success_rate != null);
@@ -727,7 +770,7 @@ function pipelines() {
   const minutes = wfs.reduce((a, w) => a + w.minutes, 0);
   const broken = wfs.filter((w) => w.broken).length;
   return [
-    h("h1", { class: `verdict${broken ? " bad" : ""}` }, broken ? `${plural(broken, "workflow is", "workflows are")} failing on the default branch.` : wfs.length ? "Pipelines are passing." : "No pipeline data yet."),
+    h("h2", { class: `verdict${broken ? " bad" : ""}` }, broken ? `${plural(broken, "workflow is", "workflows are")} failing on the default branch.` : wfs.length ? "Pipelines are passing." : "No pipeline data yet."),
     h("p", { class: "verdict-sub" }, `Every workflow's last ${days} days. Success counts completed runs on all branches; "default" is the default branch only. Minutes are run time, close to billed minutes.`),
     stats([["Workflows", num(wfs.length)], ["Runs", num(runs)], ["Success", pctText(overall), overall != null && overall < 0.9 ? "warn" : ""],
            ["CI minutes", num(minutes)], ["CI cost / 30 days", usd(ciCost())], ["Failing now", num(broken), broken ? "bad" : ""]]),
@@ -757,7 +800,7 @@ function sourcesView() {
   const bad = all.filter((s) => !s.ok);
   const label = { cluster: "Cluster", account: "AWS account", repo: "Repo", datadog: "Datadog" };
   return [
-    h("h1", { class: `verdict${bad.length ? " bad" : ""}` }, bad.length ? `pmgr couldn't read ${plural(bad.length, "source", "sources")}.` : "pmgr could read everything."),
+    h("h2", { class: `verdict${bad.length ? " bad" : ""}` }, bad.length ? `pmgr couldn't read ${plural(bad.length, "source", "sources")}.` : "pmgr could read everything."),
     h("p", { class: "verdict-sub" }, "What each check tried to read and what happened. When something is missing from another view, the reason is here."),
     all.length
       ? table([["Source"], ["Name"], ["Status"], ["What happened"]],
@@ -781,7 +824,13 @@ function workflows() {
   };
   draw();
   return [
-    h("h1", { class: "verdict" }, "Workflow gaps"),
+    (() => {
+      const all = inView("workflows");
+      const repos = new Set(all.map((f) => f.resource.split(":")[0])).size;
+      const c = counts(all);
+      return h("h2", { class: `verdict${c.critical + c.error ? " bad" : ""}` },
+        all.length ? `${plural(c.critical + c.error + c.warning, "gap", "gaps")} to fix across ${plural(repos, "repo", "repos")}.` : "No workflow gaps.");
+    })(),
     h("p", { class: "verdict-sub" }, "What your workflow files allow: unpinned actions, broad tokens, long-lived keys, missing checks and wasted minutes."),
     filters(draw),
     container,
@@ -793,12 +842,12 @@ function argo() {
   const reachable = (app.report.clusters || []).filter((c) => c.kubernetes === "ok");
   if (!reachable.length) {
     return [
-      h("h1", { class: "verdict" }, "No Argo CD to read."),
+      h("h2", { class: "verdict" }, "No Argo CD to read."),
       h("p", { class: "verdict-sub" }, "pmgr reads Argo CD Applications from clusters it can reach, and none are reachable right now. The Access view shows what's in the way."),
     ];
   }
   return [
-    h("h1", { class: "verdict" }, hasErrors(list) ? "Some apps are failing." : "Argo CD apps are healthy."),
+    h("h2", { class: "verdict" }, hasErrors(list) ? "Some apps are failing." : "Argo CD apps are healthy."),
     h("p", { class: "verdict-sub" }, "Failed syncs, degraded apps, stuck operations, render errors, and apps that won't converge."),
     list.length
       ? grouped(list, (f) => f.resource.split("/")[0], () => true)
@@ -810,37 +859,61 @@ function argo() {
 const RENDER = { overview, actions, oncall, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
+const NAV = [
+  ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
+  ["Infrastructure", [["access", "Access"], ["workloads", "Workloads"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
+  ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
+  ["System", [["sources", "Sources"]]],
+];
+const TITLES = Object.fromEntries(NAV.flatMap(([, items]) => items));
+
 function currentView() {
   const v = location.hash.replace(/^#/, "");
   return VIEWS.includes(v) ? v : "overview";
 }
 
+function navBadge(v) {
+  if (!app.report) return null;
+  let n = 0;
+  let tone = "warn";
+  if (v === "actions") {
+    const g = actionGroups();
+    n = g[0].items.length + g[2].items.length;
+    if (g[0].items.length) tone = "bad";
+  } else if (v === "sources") {
+    n = sources().filter((x) => !x.ok).length;
+  } else if (AREAS[v]) {
+    const c = counts(inView(v));
+    n = c.critical + c.error + c.warning;
+    if (c.critical + c.error) tone = "bad";
+  }
+  return n ? h("span", { class: `badge ${tone}` }, String(n)) : null;
+}
+
+function renderNav(view) {
+  document.getElementById("nav").replaceChildren(...NAV.map(([group, items]) =>
+    h("div", { class: "nav-group" }, h("span", {}, group),
+      items.map(([v, label]) => {
+        const a = h("a", { href: `#${v}`, "aria-current": v === view ? "page" : null }, label, navBadge(v));
+        a.addEventListener("click", () => { app.q = ""; });   // a fresh view starts unfiltered
+        return a;
+      }))));
+}
+
+function renderChecked() {
+  const el = document.getElementById("checked");
+  if (!app.report) { el.textContent = ""; return; }
+  const at = new Date(app.report.generated_at);
+  el.textContent = `Synced ${ago(app.report.generated_at).replace(" ago", "")} ago`.replace("Synced 1m ago", "Synced just now");
+  el.title = at.toLocaleString("en-US", { dateStyle: "long", timeStyle: "short" });
+}
+
 function render() {
   const view = currentView();
-  for (const a of document.querySelectorAll(".views a")) {
-    const v = a.dataset.view;
-    a.removeAttribute("aria-current");
-    if (v === view) a.setAttribute("aria-current", "page");
-    const old = a.querySelector(".count");
-    if (old) old.remove();
-    if (app.report && v === "actions") {
-      const g = actionGroups();
-      const n = g[0].items.length + g[1].items.length + g[2].items.length;
-      if (n) a.append(h("span", { class: "count" }, String(n)));
-    }
-    if (app.report && v === "sources") {
-      const n = sources().filter((x) => !x.ok).length;
-      if (n) a.append(h("span", { class: "count" }, String(n)));
-    }
-    if (app.report && AREAS[v]) {
-      const c = counts(inView(v));
-      const n = c.critical + c.error + c.warning;
-      if (n) a.append(h("span", { class: "count" }, String(n)));
-    }
-  }
-  document.getElementById("checked").textContent = app.report
-    ? `Checked ${new Date(app.report.generated_at).toLocaleString("en-US", { month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })}.`
-    : "";
+  renderNav(view);
+  document.getElementById("title").textContent = TITLES[view] || "Overview";
+  document.title = `${TITLES[view] || "Overview"} · pmgr`;
+  renderChecked();
   const main = document.getElementById("main");
   if (!app.report) {
     main.replaceChildren(h("p", { class: "empty" }, "This page has no report in it. Run pmgr ui to make one."));
@@ -850,6 +923,87 @@ function render() {
   renderSync();
 }
 
+// ---------- search everything ----------
+function searchIndex() {
+  const items = [];
+  const areaView = Object.fromEntries(Object.entries(AREAS).flatMap(([v, areas]) => areas.map((a) => [a, v])));
+  for (const x of sources()) items.push({ kind: { repo: "Repo", cluster: "Cluster", account: "AWS account", datadog: "Datadog" }[x.type] || x.type, label: `${x.name}  ${x.detail}`, view: x.type === "repo" ? "pipelines" : x.type === "datadog" ? "oncall" : "access", q: x.name });
+  for (const w of metrics("workflow")) items.push({ kind: "Workflow", label: `${w.repo} › ${w.workflow}`, view: "pipelines", q: w.repo });
+  for (const k of ["rds", "elasticache", "redshift", "msk", "eks"]) for (const m of metrics(k)) items.push({ kind: SERVICE[k], label: `${m.name}  ${m.class || m.version || ""}`, view: "utilization", q: m.name });
+  for (const sch of new Set(metrics("shift").map((x) => x.schedule))) items.push({ kind: "Schedule", label: sch, view: "oncall", q: "" });
+  for (const who of new Set(metrics("shift").map((x) => `${x.name}|${x.email}`))) items.push({ kind: "Person", label: who.replace("|", "  "), view: "oncall", q: "" });
+  for (const f of [...findings()].sort(bySeverity)) items.push({ kind: SEV_LABEL[f.severity], label: `${f.resource}: ${f.message}`, view: areaView[f.area] || "actions", q: f.resource });
+  return items;
+}
+
+function setupSearch() {
+  const input = document.getElementById("search");
+  const box = document.getElementById("results");
+  let hits = [];
+  let at = 0;
+  const go = (hit) => {
+    app.q = hit.q || "";
+    box.hidden = true;
+    input.value = "";
+    input.blur();
+    if (location.hash === `#${hit.view}`) render();
+    else location.hash = hit.view;
+  };
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q || !app.report) { box.hidden = true; return; }
+    const words = q.split(/\s+/);
+    hits = searchIndex().filter((x) => words.every((w) => `${x.kind} ${x.label}`.toLowerCase().includes(w))).slice(0, 12);
+    at = Math.min(at, Math.max(0, hits.length - 1));
+    box.replaceChildren(...(hits.length ? hits.map((x, i) => {
+      const a = h("a", { href: `#${x.view}`, role: "option", class: i === at ? "on" : "" }, h("span", { class: "kind" }, x.kind), h("span", { class: "label" }, x.label));
+      a.addEventListener("click", (e) => { e.preventDefault(); go(x); });
+      return a;
+    }) : [h("p", { class: "empty", style: "padding:8px 10px;margin:0" }, "Nothing matches.")]));
+    box.hidden = false;
+  };
+  input.addEventListener("input", () => { at = 0; draw(); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { at = Math.min(at + 1, hits.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { at = Math.max(at - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === "Enter" && hits[at]) { go(hits[at]); }
+    else if (e.key === "Escape") { input.value = ""; box.hidden = true; input.blur(); }
+  });
+  input.addEventListener("blur", () => setTimeout(() => { box.hidden = true; }, 150));
+}
+
+// ---------- theme and keys ----------
+function setupTheme() {
+  const select = document.getElementById("theme");
+  let saved = "system";
+  try { saved = localStorage.getItem("pmgr-theme") || "system"; } catch { /* storage blocked */ }
+  const apply = (v) => {
+    if (v === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = v;
+  };
+  select.value = saved;
+  apply(saved);
+  select.addEventListener("change", () => {
+    apply(select.value);
+    try { localStorage.setItem("pmgr-theme", select.value); } catch { /* storage blocked */ }
+  });
+}
+
+function setupKeys() {
+  const help = document.getElementById("help");
+  document.getElementById("help-close").addEventListener("click", () => { help.hidden = true; });
+  const order = NAV.flatMap(([, items]) => items.map(([v]) => v));
+  document.addEventListener("keydown", (e) => {
+    const typing = e.target instanceof Element && e.target.matches("input, select, textarea");
+    if (e.key === "Escape") { help.hidden = true; return; }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); document.getElementById("search").focus(); }
+    else if (e.key === "r") sync();
+    else if (e.key === "?") help.hidden = !help.hidden;
+    else if (/^[1-9]$/.test(e.key) && order[Number(e.key) - 1]) location.hash = order[Number(e.key) - 1];
+  });
+}
+
 function start() {
   const embedded = document.getElementById("pmgr-data");
   if (embedded) app.report = JSON.parse(embedded.textContent);
@@ -857,11 +1011,16 @@ function start() {
     app.live = true;
     app.token = new URLSearchParams(location.search).get("t") || "";
   }
+  setupTheme();
+  setupSearch();
+  setupKeys();
   window.addEventListener("hashchange", () => {
     render();
     window.scrollTo(0, 0);
     document.getElementById("main").focus({ preventScroll: true });
   });
+  // Keep "Synced … ago" and the sync timer current.
+  setInterval(() => { renderChecked(); if (app.syncing) renderSync(); }, 1000);
   render();
 }
 

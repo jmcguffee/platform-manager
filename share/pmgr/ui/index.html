@@ -9,30 +9,50 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header class="bar">
-  <div class="bar-inner">
-    <span class="brand">pmgr</span>
-    <nav class="views" aria-label="Views">
-      <a href="#overview" data-view="overview">Overview</a>
-      <a href="#actions" data-view="actions">Action items</a>
-      <a href="#oncall" data-view="oncall">On-call</a>
-      <a href="#access" data-view="access">Access</a>
-      <a href="#workloads" data-view="workloads">Workloads</a>
-      <a href="#utilization" data-view="utilization">Utilization</a>
-      <a href="#pipelines" data-view="pipelines">Pipelines</a>
-      <a href="#workflows" data-view="workflows">Workflow gaps</a>
-      <a href="#argo" data-view="argo">Argo CD</a>
-      <a href="#sources" data-view="sources">Sources</a>
-    </nav>
-    <div class="when">
-      <span id="checked"></span>
-      <span class="again">Run <code>pmgr ui</code> to check again</span>
+<div class="shell">
+  <aside class="rail" aria-label="Views">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>pmgr</div>
+    <nav id="nav"></nav>
+    <div class="rail-foot">
+      <label class="theme">Theme
+        <select id="theme" aria-label="Theme">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <p class="keys">Press <kbd>/</kbd> to search, <kbd>r</kbd> to sync, <kbd>?</kbd> for keys</p>
     </div>
+  </aside>
+  <div class="page">
+    <header class="top">
+      <h1 id="title" class="title">Overview</h1>
+      <div class="search">
+        <input id="search" type="search" placeholder="Search findings, repos, clusters…" aria-label="Search everything" autocomplete="off">
+        <div id="results" class="results" role="listbox" hidden></div>
+      </div>
+      <div class="sync">
+        <span id="checked" class="checked"></span>
+        <span class="again" id="again"></span>
+      </div>
+    </header>
+    <main id="main" tabindex="-1">
+      <p class="empty">Open this page with <code>pmgr ui</code>.</p>
+    </main>
   </div>
-</header>
-<main id="main" tabindex="-1">
-  <p class="empty">Open this page with <code>pmgr ui</code>.</p>
-</main>
+</div>
+<div id="help" class="help" hidden role="dialog" aria-label="Keyboard shortcuts">
+  <div class="help-card">
+    <h2>Keyboard shortcuts</h2>
+    <dl>
+      <dt><kbd>/</kbd></dt><dd>Search everything</dd>
+      <dt><kbd>r</kbd></dt><dd>Sync now (when served by pmgr ui)</dd>
+      <dt><kbd>1</kbd>–<kbd>9</kbd></dt><dd>Jump to a view, in rail order</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close search or this panel</dd>
+    </dl>
+    <button type="button" id="help-close">Close</button>
+  </div>
+</div>
 <script src="app.js" defer></script>
 </body>
 </html>
