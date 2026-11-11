@@ -5,7 +5,7 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "access", "workloads", "utilization", "pipelines", "workflows", "argo"];
+const VIEWS = ["overview", "access", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
 const AREAS = { access: ["auth", "cluster"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
@@ -320,6 +320,53 @@ function unseenNote() {
   );
 }
 
+// ---------- metrics helpers ----------
+function metrics(kind) { return ((app.report && app.report.metrics) || []).filter((m) => m.kind === kind); }
+function sources() { return (app.report && app.report.sources) || []; }
+function dur(s) {
+  if (s == null) return "–";
+  if (s < 90) return `${Math.round(s)}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+}
+function pctText(x) { return x == null ? "–" : `${Math.round(x * 100)}%`; }
+function ago(iso) {
+  if (!iso) return "–";
+  const m = (Date.now() - Date.parse(iso)) / 60000;
+  if (m < 60) return `${Math.max(1, Math.round(m))}m ago`;
+  if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
+  return `${Math.round(m / 1440)}d ago`;
+}
+function num(n) { return n == null ? "–" : Math.round(n).toLocaleString("en-US"); }
+// A success rate gets a color only when it's worth a look.
+function rateCell(x) {
+  const cls = x == null ? "" : x < 0.7 ? "bad" : x < 0.9 ? "warn" : "";
+  return h("td", { class: `n ${cls}` }, pctText(x));
+}
+function statusChip(last) {
+  if (!last) return "–";
+  const c = last.conclusion || last.status;
+  const kind = c === "success" ? "ok" : ["failure", "timed_out", "startup_failure"].includes(c) ? "bad" : "off";
+  const label = { success: "Passed", failure: "Failed", timed_out: "Timed out", startup_failure: "Didn't start", cancelled: "Canceled", skipped: "Skipped", in_progress: "Running", queued: "Queued" }[c] || c;
+  const chip = h("span", { class: `chip-s ${kind}` }, label);
+  return last.url ? h("a", { href: last.url, target: "_blank", rel: "noopener noreferrer", class: "plain" }, chip, ` ${ago(last.at)}`) : [chip, ` ${ago(last.at)}`];
+}
+function table(headers, rows) {
+  return h("div", { class: "table-wrap" }, h("table", { class: "data" },
+    h("thead", {}, h("tr", {}, headers.map(([label, numeric]) => h("th", { class: numeric ? "n" : "" }, label)))),
+    h("tbody", {}, rows)));
+}
+function stats(items) {
+  return h("dl", { class: "stats" }, items.map(([label, value, tone]) => h("div", { class: tone || "" }, h("dt", {}, label), h("dd", {}, value))));
+}
+function sourceProblems(type) {
+  const bad = sources().filter((s) => s.type === type && !s.ok);
+  if (!bad.length) return null;
+  return h("div", { class: "callout" },
+    h("p", { class: "callout-title" }, `Couldn't read ${plural(bad.length, type === "repo" ? "repo" : type, type === "repo" ? "repos" : `${type}s`)}`),
+    h("ul", {}, bad.map((s) => h("li", {}, h("b", {}, s.name), `: ${s.detail}. `, s.fix ? richText(s.fix) : null))));
+}
+
 // ---------- views ----------
 function overview() {
   const all = findings();
@@ -440,30 +487,58 @@ function utilization() {
 }
 
 function pipelines() {
+  const wfs = metrics("workflow");
   const list = inView("pipelines");
-  const usage = app.report.usage_minutes || {};
-  const repos = app.report.settings ? app.report.settings.repos.map((r) => r.name) : Object.keys(usage);
-  const max = Math.max(1, ...Object.values(usage).flatMap((rows) => Object.values(rows)));
   const days = app.report.settings ? app.report.settings.lookback_days : 14;
+  const repos = app.report.settings && app.report.settings.repos.length ? app.report.settings.repos.map((r) => r.name) : [...new Set(wfs.map((w) => w.repo))];
+  if (!repos.length) {
+    return [h("h1", { class: "verdict" }, "No repos configured."), h("p", { class: "verdict-sub" }, "List your repos under github.repos in ~/.config/platform-manager/config.yaml, then sync.")];
+  }
+  const runs = wfs.reduce((a, w) => a + w.runs, 0);
+  const counted = wfs.filter((w) => w.success_rate != null);
+  const overall = counted.length ? counted.reduce((a, w) => a + w.success_rate * w.runs, 0) / counted.reduce((a, w) => a + w.runs, 0) : null;
+  const minutes = wfs.reduce((a, w) => a + w.minutes, 0);
+  const broken = wfs.filter((w) => w.broken).length;
   return [
-    h("h1", { class: "verdict" }, list.some((f) => f.check === "pipeline.broken") ? "A pipeline is failing." : "Pipelines are passing."),
-    h("p", { class: "verdict-sub" }, `What runs did over the last ${days} days: broken workflows, failure rates, flaky reruns, queue time and slow runs.`),
+    h("h1", { class: `verdict${broken ? " bad" : ""}` }, broken ? `${plural(broken, "workflow is", "workflows are")} failing on the default branch.` : wfs.length ? "Pipelines are passing." : "No pipeline data yet."),
+    h("p", { class: "verdict-sub" }, `Every workflow's last ${days} days. Success counts completed runs on all branches; "default" is the default branch only. Minutes are run time, close to billed minutes.`),
+    stats([["Workflows", num(wfs.length)], ["Runs", num(runs)], ["Success", pctText(overall), overall != null && overall < 0.9 ? "warn" : ""],
+           ["CI minutes", num(minutes)], ["Failing now", num(broken), broken ? "bad" : ""]]),
+    sourceProblems("repo"),
     repos.map((repo) => {
+      const rows = wfs.filter((w) => w.repo === repo).sort((a, b) => b.minutes - a.minutes);
+      const src = sources().find((s) => s.type === "repo" && s.name === repo);
       const mine = list.filter((f) => f.resource.startsWith(`${repo}:`));
-      const rows = Object.entries(usage[repo] || {}).sort((a, b) => b[1] - a[1]);
-      return h(
-        "details",
-        { class: "group", open: true },
-        h("summary", {}, h("span", { class: "group-name" }, repo), tally(mine)),
-        h(
-          "div",
-          { class: "group-body" },
-          rows.length ? usageBars(rows, max) : h("p", { class: "empty" }, "No runs in this window, or runs couldn't be read."),
-          mine.length ? findingList(mine.sort(bySeverity)) : null,
-        ),
-      );
+      return h("section", { class: "repo" },
+        h("h2", {}, repo, h("span", { class: "tally" }, src ? ` ${src.detail}` : "")),
+        rows.length
+          ? table([["Workflow"], ["Runs", 1], ["Success", 1], ["Default", 1], ["p50", 1], ["p95", 1], ["Queue p95", 1], ["Minutes", 1], ["Last run"]],
+              rows.map((w) => h("tr", { class: w.broken ? "row-bad" : "" },
+                h("td", {}, h("span", { class: "wf" }, w.workflow), w.reruns ? h("small", { class: "muted" }, ` ${w.reruns} reruns`) : null),
+                h("td", { class: "n" }, num(w.runs)), rateCell(w.success_rate), rateCell(w.main_success_rate),
+                h("td", { class: "n" }, dur(w.duration_p50_s)), h("td", { class: "n" }, dur(w.duration_p95_s)),
+                h("td", { class: `n ${w.queue_p95_s >= 300 ? "warn" : ""}` }, dur(w.queue_p95_s)),
+                h("td", { class: "n" }, num(w.minutes)), h("td", {}, statusChip(w.last)))))
+          : h("p", { class: "empty" }, src && !src.ok ? `Not read: ${src.detail}.` : `No runs in the last ${days} days.`),
+        mine.length ? findingList(mine.sort(bySeverity)) : null);
     }),
-    unseenNote(),
+  ];
+}
+
+function sourcesView() {
+  const all = sources();
+  const bad = all.filter((s) => !s.ok);
+  const label = { cluster: "Cluster", account: "AWS account", repo: "Repo" };
+  return [
+    h("h1", { class: `verdict${bad.length ? " bad" : ""}` }, bad.length ? `pmgr couldn't read ${plural(bad.length, "source", "sources")}.` : "pmgr could read everything."),
+    h("p", { class: "verdict-sub" }, "What each check tried to read and what happened. When something is missing from another view, the reason is here."),
+    all.length
+      ? table([["Source"], ["Name"], ["Status"], ["What happened"]],
+          [...all].sort((a, b) => a.ok - b.ok).map((s) => h("tr", { class: s.ok ? "" : "row-bad" },
+            h("td", {}, label[s.type] || s.type), h("td", {}, h("b", {}, s.name)),
+            h("td", {}, h("span", { class: `chip-s ${s.ok ? "ok" : "bad"}` }, s.ok ? "Read" : "Not read")),
+            h("td", {}, s.detail, s.fix ? h("div", { class: "fix-line" }, richText(s.fix)) : null))))
+      : h("p", { class: "empty" }, "Nothing has been checked yet."),
   ];
 }
 
@@ -505,7 +580,7 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, access, workloads, utilization, pipelines, workflows, argo };
+const RENDER = { overview, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 function currentView() {
@@ -521,6 +596,10 @@ function render() {
     if (v === view) a.setAttribute("aria-current", "page");
     const old = a.querySelector(".count");
     if (old) old.remove();
+    if (app.report && v === "sources") {
+      const n = sources().filter((x) => !x.ok).length;
+      if (n) a.append(h("span", { class: "count" }, String(n)));
+    }
     if (app.report && AREAS[v]) {
       const c = counts(inView(v));
       const n = c.critical + c.error + c.warning;

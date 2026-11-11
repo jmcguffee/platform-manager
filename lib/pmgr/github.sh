@@ -73,6 +73,23 @@ gh_workflow_files() {
   return 0
 }
 
+# gh_source_failure REPO SLUG CODE KEY : record why a repo couldn't be read, in plain terms.
+gh_source_failure() {
+  local repo=$1 slug=$2 code=$3 detail fix
+  detail=$(first_line "$(err "$4")")
+  case $code in
+    "$GH_SAML") detail="Your gh token isn't authorized for this org's SAML SSO"
+      fix='Run `gh auth refresh -h github.com`, then approve SSO for the org in the browser.' ;;
+    "$GH_UNSEEN") detail="GitHub says $slug doesn't exist for this token"
+      fix='Check the repo name in your config. On an org with SAML SSO, also run `gh auth refresh -h github.com` and authorize the org.' ;;
+    "$GH_AUTH") fix='Run `gh auth login`, or `gh auth status` to see which account is active.' ;;
+    "$GH_RATE") detail="GitHub API rate limit hit"; fix="Wait for the limit to reset, or lower max_runs_per_repo." ;;
+    127) detail="The gh CLI isn't installed"; fix="brew install gh" ;;
+    *) fix='Run `gh api repos/'"$slug"'` to see the full error.' ;;
+  esac
+  source_row repo "$repo" false "$detail" "$fix"
+}
+
 # github_sweep AREA... : pipelines and/or workflow checks for every configured repo.
 github_sweep() {
   local areas=" $* " repos owner code
@@ -100,6 +117,11 @@ github_sweep() {
         '. + [$all[] | select((.name | if contains("/") then split("/")[0] else $d end) == $o)]' <<<"$readable")
     else
       github_access_finding "$owner" "$code" "org-$owner"
+      # Every repo of this owner gets a source row, so the Pipelines view can say why it's empty.
+      while IFS= read -r r; do
+        gh_source_failure "$r" "$(gh_slug "$r")" "$code" "org-$owner"
+      done < <(jq -r --arg o "$owner" --arg d "$default_org" \
+        '.[] | select((.name | if contains("/") then split("/")[0] else $d end) == $o) | .name' <<<"$repos")
     fi
   done
 

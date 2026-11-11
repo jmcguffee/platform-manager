@@ -109,3 +109,18 @@ finding() {
 sort_findings() {
   jq --argjson order "$SEVERITIES" 'sort_by((.severity as $s | $order | index($s)), .area, .resource)'
 }
+
+# --- sources and metrics --------------------------------------------------
+# A source row says what pmgr tried to read and what happened, so "nothing shows up" always
+# has an explanation on screen. A metric row is one measured thing (a workflow, a database, a
+# cluster) for the detailed tables.
+
+# source_row TYPE NAME OK DETAIL [FIX] [EXTRA_JSON]
+source_row() {
+  jq -cn --arg type "$1" --arg name "$2" --argjson ok "$3" --arg detail "$4" --arg fix "${5:-}" \
+    --argjson extra "${6:-"{}"}" '{type: $type, name: $name, ok: $ok, detail: $detail, fix: $fix} + $extra' \
+    >>"$PMGR_TMP/sources.jsonl"
+}
+
+# metric_rows : append JSON lines from stdin to the metrics file.
+metric_rows() { cat >>"$PMGR_TMP/metrics.jsonl"; }

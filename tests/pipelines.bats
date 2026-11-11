@@ -92,3 +92,24 @@ LOG=$'2026-11-11T10:00:00.0000000Z Initializing...\n2026-11-11T10:00:01.0000000Z
   [ "$(jq -r .step <<<"$got")" = Plan ]
   [ "$(jq -r .diagnosis.id <<<"$got")" = tf_state_lock ]
 }
+
+@test "workflow metrics: success on all branches and the default branch, durations, minutes, last run" {
+  f=$(runs 0:success 1:failure:feature/x 2:success:main:2 3:success 4:failure)
+  got=$(jq -c --arg repo infra --arg branch main -L "$PMGR_JQ" -f "$PMGR_JQ/pipeline_metrics.jq" "$f")
+  [ "$(jq -r '"\(.runs) \(.failures) \(.reruns) \(.broken)"' <<<"$got")" = "5 2 1 true" ]
+  [ "$(jq -r '.success_rate' <<<"$got")" = 0.6 ]
+  [ "$(jq -r '.main_success_rate' <<<"$got")" = 0.75 ]
+  [ "$(jq -r '.minutes' <<<"$got")" = 25 ]
+  [ "$(jq -r '.last.conclusion' <<<"$got")" = failure ]
+}
+
+@test "a repo the token can't see says why, in the Sources list" {
+  : >"$PMGR_TMP/sources.jsonl"
+  config 'clusters: []
+github: {org: acme, repos: [{name: infra}]}'
+  fake 1 "" "Resource protected by organization SAML enforcement." gh api --method GET orgs/acme
+  github_sweep pipelines >/dev/null
+  got=$(cat "$PMGR_TMP/sources.jsonl")
+  [ "$(jq -r '"\(.type) \(.name) \(.ok)"' <<<"$got")" = "repo infra false" ]
+  [[ "$(jq -r .fix <<<"$got")" == *"gh auth refresh -h github.com"* ]]
+}

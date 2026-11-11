@@ -11,7 +11,11 @@ report_build() {
   findings=$(printf '%s' "$findings" | auth_collapse | sort_findings)
   usage=$(cat "$PMGR_TMP/usage.jsonl" 2>/dev/null | jq -cs 'map({(.repo): .usage}) | add // {}')
   unseen=$(jq -R . "$PMGR_TMP/unseen.txt" 2>/dev/null | jq -cs .)
+  local sources metrics
+  sources=$(cat "$PMGR_TMP/sources.jsonl" 2>/dev/null | jq -cs .)
+  metrics=$(cat "$PMGR_TMP/metrics.jsonl" 2>/dev/null | jq -cs .)
   jq -n --argjson findings "$findings" --argjson usage "$usage" --argjson unseen "${unseen:-[]}" \
+    --argjson sources "${sources:-[]}" --argjson metrics "${metrics:-[]}" \
     --argjson config "$PMGR_CONFIG_JSON" --arg pim "$(pim_url)" \
     --slurpfile clusters "$PMGR_TMP/clusters.json" --slurpfile accounts "$PMGR_TMP/accounts.json" '
     {
@@ -29,7 +33,17 @@ report_build() {
                  account: .auth.account}],
       findings: $findings,
       usage_minutes: $usage,
-      unseen: $unseen
+      unseen: $unseen,
+      metrics: $metrics,
+      # Clusters and accounts first, from the access results, then what each sense recorded.
+      sources: (
+        [$clusters[0][] | {type: "cluster", name, ok: (.kubernetes == "ok"),
+           detail: ({ok: "Reachable", gone: .detail, not_active: .detail, skipped: "Not checked: the AWS session for \(.aws_profile) is \(.auth.state | gsub("_"; " "))"}[.kubernetes]
+                    // "Kubernetes: \(.kubernetes | gsub("_"; " ")). \(.detail)"),
+           fix: "", context}]
+        + [($clusters[0][], $accounts[0][]) | select(.auth.state != "ok" and .auth.state != "expiring") | {type: "account", name: .aws_profile,
+           ok: false, detail: "AWS session is \(.auth.state | gsub("_"; " ")): \(.auth.detail)", fix: "Run pmgr login \(.name)"}]
+        | unique_by([.type, .name])) + $sources
     }'
 }
 

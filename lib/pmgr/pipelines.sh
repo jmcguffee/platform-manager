@@ -30,15 +30,23 @@ pipelines_sweep() {
   key="pl-$(safe_key "$repo")"
   days=$(cfg '.github.lookback_days // 14')
   limit=$(cfg '.github.max_runs_per_repo // 300')
-  gh_get "$key-repo" "repos/$slug" || return 3
+  local code=0
+  gh_get "$key-repo" "repos/$slug" || code=$?
+  if [ "$code" -ne 0 ]; then
+    gh_source_failure "$repo" "$slug" "$code" "$key-repo"
+    return 3
+  fi
   branch=$(out "$key-repo" | jq -r '.default_branch // "main"')
   since=$(jq -rn --argjson d "$days" 'now - ($d * 86400) | strftime("%Y-%m-%d")')
 
   local runs="$PMGR_TMP/$key-runs.json"
   printf '[]' >"$runs"
   while [ "$count" -lt "$limit" ]; do
-    gh_get "$key-p$page" "repos/$slug/actions/runs?per_page=100&page=$page&created=%3E%3D$since&exclude_pull_requests=true" ||
-      { [ "$page" -eq 1 ] && return 3; break; }
+    if ! gh_get "$key-p$page" "repos/$slug/actions/runs?per_page=100&page=$page&created=%3E%3D$since&exclude_pull_requests=true"; then
+      [ "$page" -gt 1 ] && break
+      source_row repo "$repo" false "The repo is readable, but its Actions runs aren't: $(first_line "$(err "$key-p$page")")"         "Check that Actions is enabled for $slug and that your gh token has the repo scope (gh auth status)."
+      return 3
+    fi
     jq -s '.[0] + (.[1].workflow_runs // [])' "$runs" "$PMGR_TMP/$key-p$page.out" >"$runs.tmp" && mv "$runs.tmp" "$runs"
     count=$(jq length "$runs")
     [ "$(out "$key-p$page" | jq '.workflow_runs | length')" -lt 100 ] && break
@@ -69,6 +77,19 @@ pipelines_sweep() {
   done
 
   pipelines_assess "$repo" "$branch" "$runs" "$why" "$days"
+  jq -c --arg repo "$repo" --arg branch "$branch" -L "$PMGR_JQ" -f "$PMGR_JQ/pipeline_metrics.jq" "$runs" | metric_rows
+  local n last
+  n=$(jq length "$runs")
+  last=$(jq -r 'map(.created_at) | max // ""' "$runs")
+  if [ "$n" -eq 0 ]; then
+    source_row repo "$repo" true "No workflow runs in the last $days days" \
+      "Raise github.lookback_days in your config to look further back." \
+      "$(jq -cn --argjson d "$days" --arg b "$branch" --argjson p "$(out "$key-repo" | jq '.private // false')" '{runs: 0, window_days: $d, branch: $b, private: $p}')"
+  else
+    source_row repo "$repo" true "$n runs in the last $days days$([ "$n" -ge "$limit" ] && printf ' (capped at max_runs_per_repo)')" "" \
+      "$(jq -cn --argjson n "$n" --argjson d "$days" --arg b "$branch" --arg last "$last" --argjson p "$(out "$key-repo" | jq '.private // false')" \
+        '{runs: $n, window_days: $d, branch: $b, last_run: $last, private: $p}')"
+  fi
   jq -cn --arg repo "$repo" --argjson usage "$(pipelines_usage "$runs")" '{repo: $repo, usage: $usage}' \
     >>"$PMGR_TMP/usage.jsonl"
   return 0

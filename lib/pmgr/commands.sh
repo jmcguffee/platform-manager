@@ -41,6 +41,8 @@ sweep() {
   : >"$PMGR_TMP/findings.jsonl"
   : >"$PMGR_TMP/usage.jsonl"
   : >"$PMGR_TMP/unseen.txt"
+  : >"$PMGR_TMP/sources.jsonl"
+  : >"$PMGR_TMP/metrics.jsonl"
   printf '[]' >"$PMGR_TMP/clusters.json"
   printf '[]' >"$PMGR_TMP/accounts.json"
   local areas=" $* " clusters_filter=()
