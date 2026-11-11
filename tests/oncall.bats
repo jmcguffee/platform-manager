@@ -150,3 +150,25 @@ datadog: {site: acme.datadoghq.com, schedules: ["0000000a-0000-0000-0000-0000000
   got=$(oncall_sweep)
   [ "$(jq -r 'select(.check == "oncall.schedule_gap") | .message' <<<"$got")" = "Nobody is on call for Weekend from 2026-11-11 18:00 to 2026-11-11 20:00 UTC" ]
 }
+
+@test "people can come from Datadog teams, plus individual emails" {
+  config 'clusters: []
+datadog: {site: acme.datadoghq.com, people_teams: [devops, nope], people: [Contractor@onepass.example]}'
+  fake 0 '{"status":"success","data":[]}' "" pup on-call pages list
+  fake 0 '{"status":"success","data":[]}' "" pup incidents list
+  fake 0 '{"status":"success","data":{"monitors":[]}}' "" pup monitors search
+  fake 1 "" "no schedules" pup api v2/on-call/schedules
+  fake 0 '{"status":"success","data":[{"id":"t1","type":"team","attributes":{"handle":"devops","name":"DevOps"}},
+    {"id":"t2","type":"team","attributes":{"handle":"data","name":"Data"}}]}' "" pup on-call teams list
+  fake 0 '{"status":"success","data":[{"id":"m1","type":"team_memberships","attributes":{"role":"admin"}}],
+    "included":[{"id":"u1","type":"users","attributes":{"email":"Maya@onepass.example","name":"Maya"}},
+                {"id":"u2","type":"users","attributes":{"email":"sam@onepass.example","name":"Sam"}}]}' "" \
+    pup on-call teams memberships list t1
+  : >"$PMGR_TMP/unseen.txt"
+  oncall_sweep >/dev/null
+  row=$(jq -c 'select(.kind == "oncall_people")' "$PMGR_TMP/metrics.jsonl")
+  [ "$(jq -r '.emails | join(",")' <<<"$row")" = "contractor@onepass.example,maya@onepass.example,sam@onepass.example" ]
+  [ "$(jq -c '.teams[] | select(.found) | {team, name, members}' <<<"$row")" = '{"team":"devops","name":"DevOps","members":2}' ]
+  grep -q "no team named 'nope'" "$PMGR_TMP/unseen.txt"
+  ! grep -q "memberships list t2" "$FAKE_DIR/calls"   # only the teams you asked for
+}

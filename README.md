@@ -76,8 +76,12 @@ schedules (wildcards work) and, optionally, the people to show:
 datadog:
   site: yourorg.datadoghq.com
   schedules: ["OnePass*"]            # or schedule IDs; empty = every schedule
-  people: [maya@yourorg.com, priya@yourorg.com]   # e.g. your DevOps team; empty = everyone
+  people_teams: [devops]             # everyone on these Datadog teams (handle or name)
+  people: [contractor@yourorg.com]   # plus anyone else, by login email
 ```
+
+Leave both `people_teams` and `people` empty to see everyone. Team members are looked up on each
+sync, so the view follows the team as people join or leave.
 
 See [`config.example.yaml`](config.example.yaml) for the rest. `pmgr` calls Pup with
 `--read-only` every time.

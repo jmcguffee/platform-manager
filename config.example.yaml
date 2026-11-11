@@ -55,7 +55,8 @@ datadog:
   teams: []             # on-call team handles to watch, e.g. [platform, sre]; empty = all pages
   # org: ""             # a named Pup org session, if you use several
   schedules: []         # on-call schedules for "who's on call": names (wildcards ok, e.g. "OnePass*") or IDs; empty = all
-  people: []            # only show these people's shifts, e.g. your DevOps team's emails; empty = everyone
+  people_teams: []      # show everyone on these Datadog teams (handle or name), e.g. [devops]
+  people: []            # plus these people, by Datadog login email; both empty = everyone
   oncall_days: 7        # how far ahead to show
 
 github:

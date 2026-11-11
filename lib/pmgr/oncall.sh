@@ -39,6 +39,40 @@ dd_read() {
   case $(dd_classify "$(cat "$PMGR_TMP/dd/$key.err")") in auth) return 2 ;; unreachable) return 3 ;; *) return 1 ;; esac
 }
 
+# oncall_people : the people to show in "who's on call": everyone on datadog.people_teams (Datadog
+# team handles or names) plus datadog.people (emails). Writes one metric row:
+# {kind: "oncall_people", emails, teams: [{team, name, members, found}]}.
+oncall_people() {
+  local emails teams team id found="[]" key
+  emails=$(cfg '[.datadog.people // [] | .[] | ascii_downcase]')
+  teams=$(cfg '.datadog.people_teams // [] | .[]')
+  if [ -n "$teams" ]; then
+    if dd_read team-list on-call teams list; then
+      while IFS= read -r team; do
+        [ -n "$team" ] || continue
+        id=$(jq -r --arg t "$(lower "$team")" '[.data // [] | .[] | select(((.attributes.handle // "") | ascii_downcase) == $t
+              or ((.attributes.name // "") | ascii_downcase) == $t)] | first | .id // empty' "$PMGR_TMP/dd/team-list.json")
+        if [ -z "$id" ]; then
+          found=$(jq -c --arg t "$team" '. + [{team: $t, found: false, members: 0}]' <<<"$found")
+          printf "Datadog: no team named '%s' (check datadog.people_teams)\n" "$team" >>"$PMGR_TMP/unseen.txt"
+          continue
+        fi
+        key="members-$(safe_key "$team")"
+        if dd_read "$key" on-call teams memberships list "$id" --page-size 100; then
+          # Members' emails are on the included user records.
+          emails=$(jq -c --argjson have "$emails" \
+            '$have + [(.included // []) | .[] | select(.type == "users") | .attributes.email // empty | ascii_downcase]' \
+            "$PMGR_TMP/dd/$key.json")
+          found=$(jq -c --arg t "$team" --slurpfile m "$PMGR_TMP/dd/$key.json" --slurpfile l "$PMGR_TMP/dd/team-list.json" --arg id "$id" \
+            '. + [{team: $t, found: true, name: ([$l[0].data[] | select(.id == $id) | .attributes.name] | first // $t),
+                   members: ([$m[0].included // [] | .[] | select(.type == "users")] | length)}]' <<<"$found")
+        fi
+      done <<<"$teams"
+    fi
+  fi
+  jq -cn --argjson emails "$emails" --argjson teams "$found" '{kind: "oncall_people", emails: ($emails | unique), teams: $teams}' | metric_rows
+}
+
 # iso_add ISO SECONDS : an RFC 3339 time shifted by SECONDS.
 iso_add() { jq -rn --arg t "$1" --argjson d "$2" '$t | sub("\\.[0-9]+"; "") | fromdateiso8601 + $d | todateiso8601'; }
 iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601'; }
@@ -162,6 +196,7 @@ oncall_sweep() {
   [ "$code" -eq 0 ] || unread="$unread pages"
   dd_read incidents incidents list --query 'state:(active OR stable)' --limit 100 || unread="$unread incidents"
   dd_read monitors monitors search --query 'status:(alert OR warn OR "no data")' --per-page 200 || unread="$unread monitors"
+  oncall_people
   oncall_schedules
 
   jq -cn --argjson pages "{\"data\": $pages}" --slurpfile incidents "$PMGR_TMP/dd/incidents.json" \

@@ -492,7 +492,19 @@ function actions() {
 function when(iso) {
   return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
-function myPeople() { return (app.report.settings && app.report.settings.oncall_people) || []; }
+// From datadog.people_teams (their members) plus datadog.people.
+function myPeople() {
+  const row = metrics("oncall_people")[0];
+  return row ? row.emails : (app.report.settings && app.report.settings.oncall_people) || [];
+}
+function peopleLabel() {
+  const row = metrics("oncall_people")[0];
+  const teams = row ? row.teams.filter((x) => x.found) : [];
+  const extra = row ? row.emails.length - teams.reduce((a, x) => a + x.members, 0) : myPeople().length;
+  const parts = teams.map((x) => `${x.name} (${plural(x.members, "person", "people")})`);
+  if (extra > 0) parts.push(plural(extra, "other person", "other people"));
+  return parts.length ? parts.join(" + ") : plural(myPeople().length, "person", "people");
+}
 function isMine(shift) { const mine = myPeople(); return !mine.length || mine.includes((shift.email || "").toLowerCase()); }
 function shiftsNow() {
   const t = Date.now();
@@ -522,7 +534,7 @@ function whoIsOnCall() {
     h("div", { class: "oncall-now" }, cards),
     h("div", { class: "toolbar week-head" },
       h("span", { class: "group-name" }, `Next ${days} days`),
-      mine.length ? h("span", { class: "tally" }, app.everyone ? "everyone" : `your ${plural(mine.length, "person", "people")} only`) : null, toggle),
+      mine.length ? h("span", { class: "tally" }, app.everyone ? "everyone" : peopleLabel()) : null, toggle),
     week.length
       ? table([["Who"], ["Schedule"], ["From"], ["To"], [""]], week.map((x) => {
           const on = Date.parse(x.start) <= t && Date.parse(x.end) > t;
