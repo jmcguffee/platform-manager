@@ -23,7 +23,7 @@ lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 first_line() {
   # First non-empty line, trimmed and capped, for error details.
-  printf '%s\n' "$1" | awk 'NF { sub(/^[ \t]+/, ""); print substr($0, 1, 300); exit }'
+  printf '%s\n' "$1" | awk 'NF { sub(/^[ \t]+/, ""); sub(/[ \t]+$/, ""); print substr($0, 1, 300); exit }'
 }
 
 # --- temp space -----------------------------------------------------------

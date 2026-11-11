@@ -18,6 +18,7 @@ Health
   workloads [CLUSTER...]  Pods, controllers, nodes, volumes, jobs and Warning events
   argo [CLUSTER...]       Argo CD Application health on each reachable cluster
   utilization             Over- and under-used RDS, Redshift, ElastiCache, MSK and EKS capacity
+  oncall                  Datadog: open pages, active incidents, alerting monitors (needs Pup)
   pipelines [--repo R]    Pipeline failures, flakiness, slowness, and workflow gaps
   doctor                  Everything above
   ui [--file]             Open the dashboard, with a Sync now button (--file: a static page)
@@ -58,6 +59,7 @@ sweep() {
   case $areas in *" workloads "*) workloads_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" argo "*) argo_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" utilization "*) utilization_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
+  case $areas in *" oncall "*) oncall_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" pipelines "* | *" workflows "*) github_sweep "$@" >>"$PMGR_TMP/findings.jsonl" ;; esac
   # Keep access findings but drop the cluster rows when access wasn't asked for.
   case $areas in *" access "*) ;; *)
@@ -240,7 +242,7 @@ cmd_ui() {
   mkdir -p "$dir" && chmod 700 "$dir"
   file="$dir/dashboard.html"
   printf 'Checking your platform...\n' >&2
-  sweep access workloads utilization argo pipelines workflows
+  sweep access workloads utilization oncall argo pipelines workflows
   local code=0
   emit html "$file" 0 2>/dev/null || code=$?
   chmod 600 "$file"
@@ -318,15 +320,16 @@ main() {
     argo) cmd_report "argo" "$@" ;;
     workloads) cmd_report "workloads" "$@" ;;
     utilization) cmd_report "utilization" --all "$@" ;;
+    oncall) cmd_report "oncall" --all "$@" ;;
     pipelines) cmd_report "pipelines workflows" "$@" ;;
-    doctor) cmd_report "access workloads utilization argo pipelines workflows" "$@" ;;
+    doctor) cmd_report "access workloads utilization oncall argo pipelines workflows" "$@" ;;
     use) cmd_use "$@" ;;
     env) cmd_env "$@" ;;
     login) cmd_login "$@" ;;
     jit) cmd_jit "$@" ;;
     ui) cmd_ui "$@" ;;
     __render) # internal: one full sweep rendered as the live dashboard (used by the ui server)
-      sweep access workloads utilization argo pipelines workflows
+      sweep access workloads utilization oncall argo pipelines workflows
       report=$(report_build)
       report_html "$report" live >"${1:?}"
       [ -z "${2:-}" ] || printf '%s\n' "$report" >"$2"

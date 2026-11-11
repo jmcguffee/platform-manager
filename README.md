@@ -20,6 +20,9 @@ tells you the fix. `pmgr ui` shows everything as a dashboard in your browser.
   or memory, out of CPU credits, evicting keys. For EKS: nodes mostly empty or nearly full by
   requests, workloads requesting far more than they use, containers near their memory limit,
   idle nodes, and pods with no requests.
+- **On-call (Datadog):** Unacknowledged and open pages, active and stable incidents by
+  severity, and monitors alerting, warning or missing data, read through Datadog's CLI, Pup,
+  with every call read-only. It also says when Pup isn't logged in and how to fix it.
 - **Argo CD:** Failed syncs, degraded or missing apps, syncs stuck mid-operation,
   render errors, and apps with auto-sync on that still won't converge.
 - **Pipelines:** Workflows broken on the default branch right now (with the
@@ -55,6 +58,19 @@ brew install jq yq
 It runs on the bash that ships with macOS (3.2), so you don't need a newer bash.
 To update, run `git pull` in the clone.
 
+### Datadog on-call
+
+Install Pup, Datadog's CLI, and log in with your browser (SSO works):
+
+```bash
+brew install datadog-labs/pack/pup
+pup auth login --site yourorg.datadoghq.com
+```
+
+Then add a `datadog` section to your config with the same site, and optionally the on-call
+teams to watch (see [`config.example.yaml`](config.example.yaml)). `pmgr` calls Pup with
+`--read-only` every time.
+
 ## Set up
 
 ```bash
@@ -87,6 +103,7 @@ pmgr jit prod               # open the Azure PIM activation page
 
 pmgr workloads              # pods, nodes, controllers and Warning events
 pmgr utilization            # over- and under-used databases, caches, Kafka and EKS capacity
+pmgr oncall                 # Datadog pages, incidents and alerting monitors
 pmgr argo                   # Argo CD health on every reachable cluster
 pmgr pipelines              # pipeline failures and workflow gaps
 pmgr doctor                 # everything, in the terminal
@@ -105,6 +122,9 @@ and cron.
 Click **Sync now** to run the checks again; the page redraws in place and keeps your view.
 Press Ctrl+C in the terminal to stop it. The views:
 
+- **Action items:** every finding as a to-do: fix now, save money (by $/month), this week, and
+  hygiene, with Copy as Markdown for tickets.
+- **On-call:** Datadog pages, incidents and alerting monitors.
 - **Overview:** one sentence about what needs you, then an access chain for each cluster
   (AWS session, Kubernetes, workloads, Argo CD), what to fix first, and where CI time goes.
 - **Access:** the chains and every access finding.
@@ -113,6 +133,7 @@ Press Ctrl+C in the terminal to stop it. The views:
 - **Pipelines:** each repo's CI minutes and pipeline findings.
 - **Workflow gaps:** findings by repo, filterable by severity and text.
 - **Argo CD:** Application problems by cluster.
+- **Sources:** everything pmgr tried to read, and why anything couldn't be read.
 
 Commands in a fix have a copy button.
 

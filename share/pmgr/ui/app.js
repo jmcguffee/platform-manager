@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "access", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
-const AREAS = { access: ["auth", "cluster"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "actions", "oncall", "access", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
+const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
@@ -409,7 +409,9 @@ function overview() {
     h("p", { class: "verdict-sub" }, sub),
     stats([["Fix now", num(bad), bad ? "bad" : ""], ["This week", num(c.warning), c.warning ? "warn" : ""],
            ["Potential savings", `${usd(saving)}/mo`, saving ? "save" : ""], ["Spend tracked", `${usd(spendTracked())}/mo`],
-           ["CI success", pctText(ciSuccess())]]),
+           ["CI success", pctText(ciSuccess())],
+           ...(sources().some((x) => x.type === "datadog")
+             ? [["Open pages", num(metrics("page").filter((x) => !["resolved", "closed"].includes(x.status)).length)]] : [])]),
     saving || bad ? h("p", { class: "more" }, h("a", { href: "#actions" }, "See every action item")) : null,
     h("h2", {}, "Access"),
     chains(),
@@ -483,6 +485,53 @@ function actions() {
           h("p", { class: "section-note group-note" }, g.note), findingList(g.items))
       : null),
   ];
+}
+
+function oncall() {
+  const src = sources().find((x) => x.type === "datadog");
+  if (!src) {
+    return [h("h1", { class: "verdict" }, "Datadog isn't set up."),
+      h("p", { class: "verdict-sub" }, "Add a datadog section to ~/.config/platform-manager/config.yaml with your site, install Pup (brew install datadog-labs/pack/pup), run pup auth login, then sync.")];
+  }
+  const pages = metrics("page").filter((x) => !["resolved", "closed"].includes(x.status));
+  const unacked = pages.filter((x) => x.status !== "acknowledged");
+  const incidents = metrics("incident").filter((x) => ["active", "stable"].includes(x.state));
+  const alerting = metrics("monitor").filter((x) => x.status === "alert");
+  const warns = metrics("monitor").filter((x) => x.status === "warn" || x.status === "no data");
+  const auth = findings().find((f) => f.check === "datadog.auth" || f.check === "datadog.no_cli" || f.check === "datadog.unreachable");
+  const linkTo = (url, text) => h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, text);
+  const out = [
+    h("h1", { class: `verdict${unacked.length || alerting.length || auth ? " bad" : ""}` },
+      auth ? "Pup can't read Datadog." : unacked.length ? `${plural(unacked.length, "page needs", "pages need")} acknowledging.`
+        : alerting.length ? `${plural(alerting.length, "monitor is", "monitors are")} alerting.` : incidents.length ? "Pages are handled." : "All quiet."),
+    h("p", { class: "verdict-sub" }, `Datadog on ${src.name}: open pages, active incidents and alerting monitors, read-only through Pup.`),
+  ];
+  if (auth) {
+    out.push(h("div", { class: "callout" }, h("p", { class: "callout-title" }, auth.message), h("p", {}, richText(auth.fix))));
+    return out;
+  }
+  out.push(stats([["Unacknowledged pages", num(unacked.length), unacked.length ? "bad" : ""], ["Open pages", num(pages.length), pages.length ? "warn" : ""],
+    ["Active incidents", num(incidents.filter((x) => x.state === "active").length), incidents.some((x) => x.state === "active") ? "bad" : ""],
+    ["Alerting monitors", num(alerting.length), alerting.length ? "bad" : ""], ["Warning or no data", num(warns.length), warns.length ? "warn" : ""]]));
+  out.push(sourceProblems("datadog"));
+  const ago2 = (min) => (min == null ? "–" : min < 60 ? `${min}m` : min < 2880 ? `${Math.floor(min / 60)}h` : `${Math.floor(min / 1440)}d`);
+  out.push(h("h2", {}, "Pages"), pages.length
+    ? table([["Page"], ["Status"], ["Urgency"], ["Team"], ["Open for", 1]], pages.map((x) => h("tr", { class: x.status === "acknowledged" ? "" : "row-bad" },
+        h("td", {}, linkTo(x.url, x.title)), h("td", {}, h("span", { class: `chip-s ${x.status === "acknowledged" ? "off" : "bad"}` }, x.status || "open")),
+        h("td", {}, x.urgency || "–"), h("td", {}, x.team || "–"), h("td", { class: "n" }, ago2(x.opened_min)))))
+    : h("p", { class: "empty" }, "No open pages."));
+  out.push(h("h2", {}, "Incidents"), incidents.length
+    ? table([["Incident"], ["Severity"], ["State"], ["Customers"], ["Open for", 1]], incidents.map((x) => h("tr", { class: x.state === "active" ? "row-bad" : "" },
+        h("td", {}, linkTo(x.url, `${x.number ? `#${x.number} ` : ""}${x.title}`)), h("td", {}, x.severity), h("td", {}, x.state),
+        h("td", {}, x.customer_impacted ? "Affected" : "–"), h("td", { class: "n" }, ago2(x.opened_min)))))
+    : h("p", { class: "empty" }, "No active or stable incidents."));
+  const mons = [...alerting, ...warns];
+  out.push(h("h2", {}, "Monitors"), mons.length
+    ? table([["Monitor"], ["Status"], ["Priority", 1], ["Since", 1]], mons.map((x) => h("tr", { class: x.status === "alert" ? "row-bad" : "" },
+        h("td", {}, linkTo(x.url, x.name)), h("td", {}, h("span", { class: `chip-s ${x.status === "alert" ? "bad" : "off"}` }, x.status)),
+        h("td", { class: "n" }, x.priority ? `P${x.priority}` : "–"), h("td", { class: "n" }, ago2(x.triggered_min)))))
+    : h("p", { class: "empty" }, "No monitors alerting, warning or missing data."));
+  return out;
 }
 
 function access() {
@@ -645,7 +694,7 @@ function pipelines() {
 function sourcesView() {
   const all = sources();
   const bad = all.filter((s) => !s.ok);
-  const label = { cluster: "Cluster", account: "AWS account", repo: "Repo" };
+  const label = { cluster: "Cluster", account: "AWS account", repo: "Repo", datadog: "Datadog" };
   return [
     h("h1", { class: `verdict${bad.length ? " bad" : ""}` }, bad.length ? `pmgr couldn't read ${plural(bad.length, "source", "sources")}.` : "pmgr could read everything."),
     h("p", { class: "verdict-sub" }, "What each check tried to read and what happened. When something is missing from another view, the reason is here."),
@@ -697,7 +746,7 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, oncall, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 function currentView() {

@@ -48,6 +48,13 @@ cost:
   # GitHub Actions rate for private repos, used to estimate CI cost (Linux 2-core list price).
   actions_usd_per_minute: 0.008
 
+# Datadog on-call, read through Pup (brew install datadog-labs/pack/pup; then pup auth login).
+# Remove this section to skip it.
+datadog:
+  site: datadoghq.com   # the host you log in to, e.g. yourorg.datadoghq.com or datadoghq.eu
+  teams: []             # on-call team handles to watch, e.g. [platform, sre]; empty = all pages
+  # org: ""             # a named Pup org session, if you use several
+
 github:
   org: your-org
   lookback_days: 14

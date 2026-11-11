@@ -62,7 +62,7 @@ report_text() {
     def session: if .aws == "ok" then "ok" else (.aws | gsub("_"; " ")) end;
     {critical: "35", error: "31", warning: "33", info: "36"} as $colors
     | {critical: "CRIT", error: "ERR ", warning: "WARN", info: "INFO"} as $labels
-    | {auth: "Access", cluster: "Clusters", workload: "Workloads", utilization: "Utilization", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
+    | {auth: "Access", cluster: "Clusters", workload: "Workloads", utilization: "Utilization", oncall: "On-call", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
     | ([.clusters[] | [(if .current then "*" else "" end), .name, session,
           (if .kubernetes == "skipped" then "-" else (.kubernetes | gsub("_"; " ")) end), .context]]
        + [.accounts[] | ["", .name, session, "-", "(account \(if .account == "" then .profile else .account end))"]]) as $rows
@@ -75,7 +75,7 @@ report_text() {
        else empty end),
       (if ($shown | length) == 0 then c("32"; if $hidden > 0 then "No warnings or errors." else "No problems found." end)
        else empty end),
-      ($shown | group_by(.area) | sort_by(.[0].area as $a | ["auth","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
+      ($shown | group_by(.area) | sort_by(.[0].area as $a | ["auth","oncall","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
         | c("1"; $titles[.[0].area] // .[0].area),
           (.[] | "  \(c($colors[.severity]; $labels[.severity])) \(.resource): \(.message)",
                  (if .fix != "" then "       fix: \(.fix)" else empty end),
@@ -93,7 +93,7 @@ report_text() {
 
 report_md() {
   jq -r '
-    {auth: "Access", cluster: "Clusters", workload: "Workloads", utilization: "Utilization", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
+    {auth: "Access", cluster: "Clusters", workload: "Workloads", utilization: "Utilization", oncall: "On-call", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
     | (.findings | group_by(.severity) | map({(.[0].severity): length}) | add // {}) as $n
     | "# Platform report, \(.generated_at | fromdateiso8601 | strftime("%B %-d, %Y %H:%M")) UTC", "",
       ([["critical","error","warning","info"][] as $s | "**\($n[$s] // 0)** \($s)"] | join(", ")),
@@ -102,7 +102,7 @@ report_md() {
         (.clusters[] | "| \(if .current then "*" else "" end) | \(.name) | \(.aws | gsub("_"; " ")) | \(.kubernetes | gsub("_"; " ")) |"),
         (.accounts[] | "| | \(.name) | \(.aws | gsub("_"; " ")) | - |")
        else empty end),
-      (.findings | group_by(.area) | sort_by(.[0].area as $a | ["auth","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
+      (.findings | group_by(.area) | sort_by(.[0].area as $a | ["auth","oncall","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
         | "", "## \($titles[.[0].area] // .[0].area)", "",
           (.[] | "- **\(.severity)** `\(.resource)`: \(.message)"
                  + (if .fix != "" then "  \n  Fix: \(.fix)" else "" end)
