@@ -1,0 +1,41 @@
+# platform-manager config. Lives at ~/.config/platform-manager/config.yaml
+# (or wherever PMGR_CONFIG points). It holds org-specific details, so keep it
+# out of git.
+
+pim:
+  # Where to activate your AWS roles (PIM for Groups' "My roles" page).
+  # Set to "" if you don't use PIM: hints then point at SSO login instead.
+  activation_url: "https://portal.azure.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/aadgroup"
+  session_hours: 8   # how long an activation lasts
+  warn_minutes: 30   # warn when a session with a visible expiry has less than this left
+
+aws:
+  # How `pmgr login` refreshes a session. {profile} becomes the profile name.
+  # A list, run directly: it never goes through a shell.
+  refresh_command: [aws, sso, login, --profile, "{profile}"]
+  # SSO accounts with no cluster, checked by `pmgr status`.
+  profiles: []
+
+# One entry per cluster. `pmgr init --from-kubeconfig` fills these in for you.
+clusters:
+  - name: staging
+    context: arn:aws:eks:us-east-1:111111111111:cluster/staging
+    aws_profile: staging-platform
+    expected_role: PlatformAdmin          # part of the assumed-role ARN
+    pim_group: AWS-Staging-PlatformAdmin  # shown in hints so you know what to activate
+  - name: prod
+    context: arn:aws:eks:us-east-1:222222222222:cluster/prod
+    aws_profile: prod-platform
+    expected_role: PlatformAdmin
+    pim_group: AWS-Prod-PlatformAdmin
+
+github:
+  org: your-org
+  lookback_days: 14
+  max_runs_per_repo: 300
+  # kind: terraform | gitops | app | other. It decides which repo-level gap checks run.
+  # Use owner/repo for a repo outside `org`.
+  repos:
+    - {name: platform-infra, kind: terraform}
+    - {name: platform-apps, kind: gitops}
+    - {name: dns, kind: terraform}

@@ -14,38 +14,15 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.11", "3.12", "3.13"]
+    # macOS, because that's where pmgr runs: this also proves it works on the system bash 3.2.
+    runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e '.[dev]'
-      - run: ruff check src tests contrib
-      - run: ruff format --check src tests
-      - run: pytest -q
-
-  audit:
-    # Fails the build on any known vulnerability in runtime or dev dependencies.
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: "3.13"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - run: pip install -e '.[dev]'
-      - run: pip-audit --skip-editable
+      - run: brew install jq yq shellcheck bats-core
+      - run: /bin/bash --version | head -1
+      - run: shellcheck bin/pmgr lib/pmgr/*.sh tests/stubs/fake tests/helpers.bash
+      - run: bats tests/
+      - run: bin/pmgr version

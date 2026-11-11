@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# pmgr: read-only checks for an AWS + EKS + Argo CD + GitHub Actions platform.
+# Run `pmgr help` for commands.
+set -uo pipefail
+
+# Find our files even when bin/pmgr is a symlink on PATH (macOS readlink has no -f before 12.3).
+src=$0
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  case $src in /*) ;; *) src="$dir/$src" ;; esac
+done
+PMGR_ROOT=$(cd -P "$(dirname "$src")/.." && pwd)
+export PMGR_ROOT
+
+for lib in core auth clusters github runfailure pipelines workflows argo report commands; do
+  # shellcheck source=/dev/null
+  . "$PMGR_ROOT/lib/pmgr/$lib.sh"
+done
+
+main "$@"

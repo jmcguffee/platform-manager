@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Stand-in for aws, kubectl and gh in tests. Answers from $FAKE_DIR/rules (JSON lines written by
+# the `fake` test helper): the longest rule whose argument prefix matches wins. Unknown calls fail.
+cmd=$(basename "$0")
+joined=$(printf '%s\037' "$@")
+printf '%s\t%s\t%s\n' "$cmd" "${AWS_PROFILE:-}" "$*" >>"$FAKE_DIR/calls"
+rule=$(jq -c --arg cmd "$cmd" --arg j "$joined" '. as $r | select($r.cmd == $cmd and ($j | startswith($r.prefix)))' \
+  "$FAKE_DIR/rules" 2>/dev/null | jq -sc 'sort_by(.prefix | length) | last // empty')
+if [ -z "$rule" ]; then
+  printf 'fake %s: no rule for: %s\n' "$cmd" "$*" >&2
+  exit 1
+fi
+jq -j '.stdout' <<<"$rule"
+jq -j '.stderr' <<<"$rule" >&2
+exit "$(jq -r .code <<<"$rule")"

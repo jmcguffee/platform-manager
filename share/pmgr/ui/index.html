@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<title>Platform manager</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="bar">
+  <div class="bar-inner">
+    <span class="brand">pmgr</span>
+    <nav class="views" aria-label="Views">
+      <a href="#overview" data-view="overview">Overview</a>
+      <a href="#access" data-view="access">Access</a>
+      <a href="#pipelines" data-view="pipelines">Pipelines</a>
+      <a href="#workflows" data-view="workflows">Workflow gaps</a>
+      <a href="#argo" data-view="argo">Argo CD</a>
+    </nav>
+    <div class="when">
+      <span id="checked"></span>
+      <span class="again">Run <code>pmgr ui</code> to check again</span>
+    </div>
+  </div>
+</header>
+<main id="main" tabindex="-1">
+  <p class="empty">Open this page with <code>pmgr ui</code>.</p>
+</main>
+<script src="app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+# Fix text quotes commands in Markdown backticks on purpose, so `...` inside single quotes is literal.
+disable=SC2016
+shell=bash
