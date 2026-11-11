@@ -29,6 +29,10 @@ clusters:
     expected_role: PlatformAdmin
     pim_group: AWS-Prod-PlatformAdmin
 
+workloads:
+  event_window_minutes: 60   # how far back to read Warning events (Kubernetes keeps about an hour)
+  ignore_namespaces: []      # namespaces to skip, e.g. [sandbox]
+
 github:
   org: your-org
   lookback_days: 14

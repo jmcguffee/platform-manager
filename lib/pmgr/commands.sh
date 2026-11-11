@@ -15,6 +15,7 @@ Access
   jit [NAME]              Open the Azure PIM activation page
 
 Health
+  workloads [CLUSTER...]  Pods, controllers, nodes, volumes, jobs and Warning events
   argo [CLUSTER...]       Argo CD Application health on each reachable cluster
   pipelines [--repo R]    Pipeline failures, flakiness, slowness, and workflow gaps
   doctor                  Everything above
@@ -24,7 +25,7 @@ Setup
   init [--from-kubeconfig] [--force]   Create ~/.config/platform-manager/config.yaml
   version
 
-Output options for status, argo, pipelines and doctor:
+Output options for status, workloads, argo, pipelines and doctor:
   --format text|json|md|html   (default: text)
   --out FILE                   Write to a file instead of the terminal
   --all                        Include info-level findings in text output
@@ -46,16 +47,17 @@ sweep() {
     while IFS= read -r c; do [ -n "$c" ] && clusters_filter+=("$c"); done <<<"$SWEEP_CLUSTERS"
   fi
 
-  case $areas in *" access "* | *" argo "*)
+  case $areas in *" access "* | *" argo "* | *" workloads "*)
     access_sweep ${clusters_filter[@]+"${clusters_filter[@]}"} >"$PMGR_TMP/access.jsonl"
     case $areas in *" access "*) cat "$PMGR_TMP/access.jsonl" >>"$PMGR_TMP/findings.jsonl" ;; esac
     ;;
   esac
+  case $areas in *" workloads "*) workloads_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" argo "*) argo_sweep >>"$PMGR_TMP/findings.jsonl" ;; esac
   case $areas in *" pipelines "* | *" workflows "*) github_sweep "$@" >>"$PMGR_TMP/findings.jsonl" ;; esac
   # Keep access findings but drop the cluster rows when access wasn't asked for.
   case $areas in *" access "*) ;; *)
-    case $areas in *" argo "*) ;; *) printf '[]' >"$PMGR_TMP/clusters.json" ;; esac
+    case $areas in *" argo "* | *" workloads "*) ;; *) printf '[]' >"$PMGR_TMP/clusters.json" ;; esac
     printf '[]' >"$PMGR_TMP/accounts.json"
     ;;
   esac
@@ -225,7 +227,7 @@ cmd_ui() {
   mkdir -p "$dir" && chmod 700 "$dir"
   file="$dir/dashboard.html"
   printf 'Checking your platform...\n' >&2
-  sweep access argo pipelines workflows
+  sweep access workloads argo pipelines workflows
   local code=0
   emit html "$file" 0 2>/dev/null || code=$?
   chmod 600 "$file"
@@ -299,8 +301,9 @@ main() {
   case $cmd in
     status) cmd_report "access" "$@" ;;
     argo) cmd_report "argo" "$@" ;;
+    workloads) cmd_report "workloads" "$@" ;;
     pipelines) cmd_report "pipelines workflows" "$@" ;;
-    doctor) cmd_report "access argo pipelines workflows" "$@" ;;
+    doctor) cmd_report "access workloads argo pipelines workflows" "$@" ;;
     use) cmd_use "$@" ;;
     env) cmd_env "$@" ;;
     login) cmd_login "$@" ;;

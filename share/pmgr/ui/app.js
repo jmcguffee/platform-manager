@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "access", "pipelines", "workflows", "argo"];
-const AREAS = { access: ["auth", "cluster"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "access", "workloads", "pipelines", "workflows", "argo"];
+const AREAS = { access: ["auth", "cluster"], workloads: ["workload"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 
 const AWS_STATE = {
   ok: ["ok", "Signed in"],
@@ -128,6 +128,16 @@ function link(kind, label, detail) {
   return h("div", { class: `link ${kind}`, role: "listitem" }, h("b", {}, label), detail ? h("span", {}, detail) : null);
 }
 
+function workloadLink(cluster) {
+  if (cluster.kubernetes !== "ok") return ["off", "Not checked"];
+  const list = findings().filter((f) => f.area === "workload" && f.resource.startsWith(`${cluster.name}/`));
+  const c = counts(list);
+  if (c.critical + c.error) return ["bad", plural(c.critical + c.error, "problem", "problems")];
+  if (c.warning) return ["warn", plural(c.warning, "warning", "warnings")];
+  const unseen = (app.report.unseen || []).some((u) => u.startsWith(`${cluster.name}: couldn't read`));
+  return unseen ? ["warn", "Partly readable"] : ["ok", "Healthy"];
+}
+
 function argoLink(cluster) {
   if (cluster.kubernetes !== "ok") return ["off", "Not checked"];
   const list = findings().filter((f) => f.area === "argo" && f.resource.startsWith(`${cluster.name}/`));
@@ -144,6 +154,7 @@ function chains() {
   for (const c of r.clusters || []) {
     const [ak, alabel] = AWS_STATE[c.aws] || ["bad", c.aws];
     const [kk, klabel] = K8S_STATE[c.kubernetes] || ["bad", c.kubernetes];
+    const [wk, wdetail] = workloadLink(c);
     const [gk, gdetail] = argoLink(c);
     rows.push(
       h(
@@ -156,6 +167,8 @@ function chains() {
           link(ak, "AWS session", alabel),
           h("span", { class: `joint ${ak === "ok" ? "" : "broken"}`, "aria-hidden": "true" }),
           link(kk, "Kubernetes", klabel),
+          h("span", { class: `joint ${kk === "ok" ? "" : "broken"}`, "aria-hidden": "true" }),
+          link(wk, "Workloads", wdetail),
           h("span", { class: `joint ${kk === "ok" ? "" : "broken"}`, "aria-hidden": "true" }),
           link(gk, "Argo CD", gdetail),
         ),
@@ -194,8 +207,8 @@ function usageBars(rows, max) {
   );
 }
 
-function filters(onChange) {
-  const search = h("input", { type: "search", placeholder: "Filter by repo, file or text", "aria-label": "Filter findings" });
+function filters(onChange, placeholder = "Filter by repo, file or text") {
+  const search = h("input", { type: "search", placeholder, "aria-label": "Filter findings" });
   search.value = app.q;
   search.addEventListener("input", () => { app.q = search.value; onChange(); });
   const chips = SEV.map((s) => {
@@ -294,10 +307,41 @@ function access() {
   const list = inView("access").sort(bySeverity);
   return [
     h("h1", { class: "verdict" }, hasErrors(list) ? "Some access is broken." : "Access is working."),
-    h("p", { class: "verdict-sub" }, "Each row follows the path a command takes: your AWS session, then the cluster's API, then Argo CD on it."),
+    h("p", { class: "verdict-sub" }, "Each row follows the path a command takes: your AWS session, then the cluster's API, then what runs on it."),
     chains(),
     h("h2", {}, "Findings"),
     list.length ? findingList(list) : h("p", { class: "empty" }, "No access problems."),
+  ];
+}
+
+function workloads() {
+  const reachable = (app.report.clusters || []).filter((c) => c.kubernetes === "ok");
+  if (!reachable.length) {
+    return [
+      h("h1", { class: "verdict" }, "No cluster to read."),
+      h("p", { class: "verdict-sub" }, "pmgr reads workloads and events from clusters it can reach, and none are reachable right now. The Access view shows what's in the way."),
+    ];
+  }
+  const container = h("div");
+  const draw = () => {
+    const list = inView("workloads").filter(passes);
+    // Group by cluster and namespace (nodes group under the cluster).
+    const key = (f) => {
+      const [cluster, ns] = f.resource.split("/");
+      return ns === "node" ? `${cluster} › nodes` : `${cluster} › ${ns}`;
+    };
+    container.replaceChildren(
+      ...(list.length ? grouped(list, key, (items) => items.some((f) => f.severity !== "info")) : [h("p", { class: "empty" }, "No workload problems match these filters.")]),
+    );
+  };
+  draw();
+  const all = inView("workloads");
+  return [
+    h("h1", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, hasErrors(all) ? "Some workloads are failing." : all.length ? "Workloads are running." : "Workloads are healthy."),
+    h("p", { class: "verdict-sub" }, `Pods, controllers, nodes, volumes and jobs on ${reachable.map((c) => c.name).join(", ")}, plus Warning events from the last hour that status alone doesn't explain.`),
+    filters(draw, "Filter by namespace, workload or text"),
+    container,
+    unseenNote(),
   ];
 }
 
@@ -367,7 +411,7 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, access, pipelines, workflows, argo };
+const RENDER = { overview, access, workloads, pipelines, workflows, argo };
 
 // ---------- shell ----------
 function currentView() {

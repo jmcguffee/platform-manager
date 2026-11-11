@@ -10,6 +10,11 @@ tells you the fix. `pmgr ui` shows everything as a dashboard in your browser.
   Center, VPN, a missing EKS access entry, or a cluster that no longer exists.
 - **Clusters:** `pmgr use` switches kubectl contexts only after the target passes
   its checks.
+- **Workloads:** Crash-looping or OOM-killed pods, image pull and missing-config errors, pods stuck
+  Pending (with the scheduler's reason), Deployments and StatefulSets missing replicas, stalled
+  rollouts, NotReady or pressured nodes, Pending PVCs, failed Jobs, and recent Warning events that
+  status doesn't explain (volume mounts, CNI out of IPs, webhooks rejecting pods, failing probes, HPA
+  metrics, TargetGroupBinding errors). Grouped by workload, so one broken Deployment is one finding.
 - **Argo CD:** Failed syncs, degraded or missing apps, syncs stuck mid-operation,
   render errors, and apps with auto-sync on that still won't converge.
 - **Pipelines:** Workflows broken on the default branch right now (with the
@@ -75,6 +80,7 @@ eval "$(pmgr env prod)"     # set AWS_PROFILE for this shell
 pmgr login prod             # refresh the session, then re-check
 pmgr jit prod               # open the Azure PIM activation page
 
+pmgr workloads              # pods, nodes, controllers and Warning events
 pmgr argo                   # Argo CD health on every reachable cluster
 pmgr pipelines              # pipeline failures and workflow gaps
 pmgr doctor                 # everything, in the terminal
@@ -90,13 +96,14 @@ and cron.
 ### The dashboard
 
 `pmgr ui` runs every check (about 15 seconds), writes the dashboard to
-`~/.cache/platform-manager/dashboard.html` (mode 600) and opens it. It has five
+`~/.cache/platform-manager/dashboard.html` (mode 600) and opens it. It has six
 views:
 
 - **Overview:** one sentence about what needs you, then an access chain for each
-  cluster (AWS session, then Kubernetes, then Argo CD), what to fix first, and
+  cluster (AWS session, Kubernetes, workloads, Argo CD), what to fix first, and
   where CI time goes.
 - **Access:** the chains and every access finding.
+- **Workloads:** problems by cluster and namespace, filterable.
 - **Pipelines:** each repo's CI minutes and pipeline findings.
 - **Workflow gaps:** findings by repo, filterable by severity and text.
 - **Argo CD:** Application problems by cluster.
@@ -136,6 +143,7 @@ lib/pmgr/
   auth.sh             AWS session state per profile
   clusters.sh         API reachability, RBAC, deleted clusters, context switching
   argo.sh             Argo CD Application status
+  workloads.sh        pods, controllers, nodes, volumes, jobs, Warning events
   github.sh           read-only GitHub API through gh
   pipelines.sh        run history: broken, unreliable, flaky, queued, slow
   runfailure.sh       the error line and certain fixes from a failed job's log
