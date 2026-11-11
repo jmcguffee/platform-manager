@@ -242,3 +242,7 @@ section.repo .findings { margin-top: 12px; }
 .callout-title { margin: 0 0 6px; font-weight: 600; color: var(--bad); }
 .callout ul { margin: 0; padding-left: 18px; }
 .fix-line { color: var(--steel); margin-top: 4px; }
+
+.save { margin: 0 0 4px; font-weight: 600; color: var(--ok); font-size: 13.5px; }
+.group-note { margin: -4px 0 8px 22px; }
+.views { row-gap: 2px; }

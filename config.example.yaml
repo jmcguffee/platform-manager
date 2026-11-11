@@ -44,6 +44,10 @@ utilization:
   memory_high: 80       # ElastiCache memory used %
   regions: {}           # region per profile when ~/.aws/config doesn't set one, e.g. {prod-platform: us-east-2}
 
+cost:
+  # GitHub Actions rate for private repos, used to estimate CI cost (Linux 2-core list price).
+  actions_usd_per_minute: 0.008
+
 github:
   org: your-org
   lookback_days: 14

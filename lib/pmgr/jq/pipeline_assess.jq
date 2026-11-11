@@ -13,7 +13,9 @@ by_workflow[] | . as $rows | ($rows[0] | wf_label) as $name
                 + (if $b.last_success then $b.last_success.created_at[0:10] else "over \($days) days" end) + ")"
                 + (if ($first.step // "") != "" then ". Fails at '\($first.job) › \($first.step)'" else "" end)
                 + (if ($first.error // "") != "" then ": \($first.error)" else "" end)),
-              fix: ([$d.cause, $d.fix] | map(select(. != null and . != "")) | join(" ")),
+              fix: (if $b.latest.conclusion == "startup_failure" and ($d | length) == 0 then
+                      "The run never started. That's either an error in the workflow file (GitHub shows it on the run page) or a GitHub outage: check githubstatus.com, then re-run it."
+                    else ([$d.cause, $d.fix] | map(select(. != null and . != "")) | join(" ")) end),
               evidence: {streak: $b.streak, failures: $ex}}
         else empty end),
         (if $b == null and ($main | length) >= 6 then

@@ -113,3 +113,8 @@ github: {org: acme, repos: [{name: infra}]}'
   [ "$(jq -r '"\(.type) \(.name) \(.ok)"' <<<"$got")" = "repo infra false" ]
   [[ "$(jq -r .fix <<<"$got")" == *"gh auth refresh -h github.com"* ]]
 }
+
+@test "a run that never started says why that usually happens" {
+  got=$(assess "$(runs 0:success 1:startup_failure)")
+  [[ "$(jq -r .fix <<<"$got")" == *githubstatus.com* ]]
+}

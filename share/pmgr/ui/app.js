@@ -5,7 +5,7 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "access", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
+const VIEWS = ["overview", "actions", "access", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
 const AREAS = { access: ["auth", "cluster"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
@@ -162,6 +162,7 @@ function findingRow(f) {
     h(
       "div",
       {},
+      f.savings_usd_month ? h("p", { class: "save" }, `${f.savings_note === "up to" ? "Save up to" : "Save about"} ${usd(f.savings_usd_month)}/month`, h("span", { class: "muted" }, " at list price")) : null,
       h("p", { class: "what" }, h("span", { class: "sev" }, SEV_LABEL[f.severity]), h("span", { class: "where" }, f.resource), ": ", richText(f.message, false)),
       f.fix ? h("p", { class: "fix" }, richText(f.fix)) : null,
       f.link ? h("p", { class: "ref" }, h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, linkLabel(f))) : null,
@@ -337,6 +338,16 @@ function ago(iso) {
   if (m < 48 * 60) return `${Math.round(m / 60)}h ago`;
   return `${Math.round(m / 1440)}d ago`;
 }
+function usd(n) { return n == null ? "–" : `$${Math.round(n).toLocaleString("en-US")}`; }
+function savingsTotal(list) { return list.reduce((a, f) => a + (f.savings_usd_month || 0), 0); }
+// CI cost per 30 days for private repos, at the configured rate.
+function ciCost() {
+  const rate = (app.report.settings && app.report.settings.ci_usd_per_minute) || 0.008;
+  const days = (app.report.settings && app.report.settings.lookback_days) || 14;
+  const priv = new Set(sources().filter((s) => s.type === "repo" && s.private).map((s) => s.name));
+  return metrics("workflow").filter((w) => priv.has(w.repo)).reduce((a, w) => a + w.minutes, 0) * rate * (30 / days);
+}
+function spendTracked() { return ((app.report && app.report.metrics) || []).reduce((a, m) => a + (m.monthly_usd || 0), 0) + ciCost(); }
 function num(n) { return n == null ? "–" : Math.round(n).toLocaleString("en-US"); }
 // A success rate gets a color only when it's worth a look.
 function rateCell(x) {
@@ -392,9 +403,14 @@ function overview() {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6);
   const days = app.report.settings ? app.report.settings.lookback_days : null;
+  const saving = savingsTotal(all);
   return [
     h("h1", { class: cls }, verdict),
     h("p", { class: "verdict-sub" }, sub),
+    stats([["Fix now", num(bad), bad ? "bad" : ""], ["This week", num(c.warning), c.warning ? "warn" : ""],
+           ["Potential savings", `${usd(saving)}/mo`, saving ? "save" : ""], ["Spend tracked", `${usd(spendTracked())}/mo`],
+           ["CI success", pctText(ciSuccess())]]),
+    saving || bad ? h("p", { class: "more" }, h("a", { href: "#actions" }, "See every action item")) : null,
     h("h2", {}, "Access"),
     chains(),
     h("h2", {}, urgent.length ? "What to fix first" : "Findings"),
@@ -408,6 +424,64 @@ function overview() {
         ]
       : null,
     unseenNote(),
+  ];
+}
+
+function ciSuccess() {
+  const wfs = metrics("workflow").filter((w) => w.success_rate != null);
+  const runs = wfs.reduce((a, w) => a + w.runs, 0);
+  return runs ? wfs.reduce((a, w) => a + w.success_rate * w.runs, 0) / runs : null;
+}
+
+function actionGroups() {
+  const all = findings();
+  const savers = all.filter((f) => f.savings_usd_month > 0).sort((a, b) => b.savings_usd_month - a.savings_usd_month);
+  const saverSet = new Set(savers);
+  return [
+    { id: "now", title: "Fix now", note: "Broken or about to break.", items: all.filter((f) => (f.severity === "critical" || f.severity === "error") && !saverSet.has(f)) },
+    { id: "save", title: "Save money", note: "Largest monthly savings first, at on-demand list price (your discounts would lower them).", items: savers },
+    { id: "week", title: "This week", note: "Risks and gaps worth fixing soon.", items: all.filter((f) => f.severity === "warning" && !saverSet.has(f)) },
+    { id: "hygiene", title: "Hygiene", note: "Small improvements.", items: all.filter((f) => f.severity === "info" && !saverSet.has(f)) },
+  ];
+}
+
+function markdown(groups) {
+  const lines = [`# Platform action items, ${new Date(app.report.generated_at).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`];
+  for (const g of groups) {
+    if (!g.items.length) continue;
+    lines.push("", `## ${g.title}${g.id === "save" ? ` (${usd(savingsTotal(g.items))}/month)` : ""}`, "");
+    for (const f of g.items) {
+      lines.push(`- [ ] **${f.resource}**: ${f.message}${f.savings_usd_month ? ` (save about ${usd(f.savings_usd_month)}/month)` : ""}`);
+      if (f.fix) lines.push(`  - Fix: ${f.fix}`);
+      if (f.link) lines.push(`  - ${f.link}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function actions() {
+  const groups = actionGroups();
+  const [now, save, week] = groups;
+  const copy = h("button", { type: "button" }, "Copy as Markdown");
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(markdown(groups)); copy.textContent = "Copied"; }
+    catch { copy.textContent = "Couldn't copy"; }
+    setTimeout(() => { copy.textContent = "Copy as Markdown"; }, 1500);
+  });
+  const verdict = now.items.length ? `${plural(now.items.length, "thing needs", "things need")} fixing now.`
+    : save.items.length ? `You could save about ${usd(savingsTotal(save.items))} a month.` : week.items.length ? "Nothing urgent." : "Nothing to do.";
+  return [
+    h("h1", { class: `verdict${now.items.length ? " bad" : ""}` }, verdict),
+    h("p", { class: "verdict-sub" }, "Every finding as a to-do, in the order worth doing them. Copy the list into a ticket or a message."),
+    stats([["Fix now", num(now.items.length), now.items.length ? "bad" : ""], ["Save money", `${usd(savingsTotal(save.items))}/mo`, save.items.length ? "save" : ""],
+           ["This week", num(week.items.length), week.items.length ? "warn" : ""], ["Hygiene", num(groups[3].items.length)]]),
+    h("div", { class: "toolbar" }, copy),
+    groups.map((g) => g.items.length
+      ? h("details", { class: "group", open: g.id !== "hygiene" },
+          h("summary", {}, h("span", { class: "group-name" }, g.title),
+            h("span", { class: "tally" }, g.id === "save" ? `${plural(g.items.length, "item", "items")}, ${usd(savingsTotal(g.items))}/month` : plural(g.items.length, "item", "items"))),
+          h("p", { class: "section-note group-note" }, g.note), findingList(g.items))
+      : null),
   ];
 }
 
@@ -468,6 +542,38 @@ function utilization() {
     );
   };
   draw();
+  const svcTables = [];
+  const rds = metrics("rds");
+  if (rds.length) svcTables.push(h("h2", {}, "RDS"), table(
+    [["Instance"], ["Account"], ["Class"], ["Engine"], ["CPU avg", 1], ["CPU p95", 1], ["CPU max", 1], ["Connections", 1], ["Free storage", 1], ["$/month", 1]],
+    rds.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name), m.multi_az ? h("small", { class: "muted" }, " Multi-AZ") : null), h("td", {}, m.account),
+      h("td", {}, m.class), h("td", {}, m.engine), pcell(m.cpu_avg), pcell(m.cpu_p95, 80), pcell(m.cpu_max), h("td", { class: "n" }, num(m.connections_max)),
+      h("td", { class: `n ${m.free_storage_pct != null && m.free_storage_pct < 15 ? "warn" : ""}` }, m.free_storage_pct == null ? "–" : `${m.free_storage_pct}%`),
+      h("td", { class: "n" }, usd(m.monthly_usd))))));
+  const cache = metrics("elasticache");
+  if (cache.length) svcTables.push(h("h2", {}, "ElastiCache"), table(
+    [["Cluster"], ["Account"], ["Nodes", 1], ["Node type"], ["CPU avg", 1], ["CPU p95", 1], ["Memory max", 1], ["Evictions", 1], ["$/month", 1]],
+    cache.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
+      pcell(m.cpu_avg), pcell(m.cpu_p95, 80), pcell(m.memory_max, 80), h("td", { class: `n ${m.evictions ? "warn" : ""}` }, num(m.evictions)), h("td", { class: "n" }, usd(m.monthly_usd))))));
+  const rs = metrics("redshift");
+  if (rs.length) svcTables.push(h("h2", {}, "Redshift"), table(
+    [["Cluster"], ["Account"], ["Nodes", 1], ["Node type"], ["CPU avg", 1], ["CPU p95", 1], ["Disk used", 1], ["$/month", 1]],
+    rs.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
+      pcell(m.cpu_avg), pcell(m.cpu_p95, 80), pcell(m.disk_used_max, 80), h("td", { class: "n" }, usd(m.monthly_usd))))));
+  const msk = metrics("msk");
+  if (msk.length) svcTables.push(h("h2", {}, "MSK"), table(
+    [["Cluster"], ["Account"], ["Brokers", 1], ["Broker type"], ["CPU avg", 1], ["CPU p95", 1], ["Disk used", 1], ["$/month", 1]],
+    msk.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
+      pcell(m.cpu_avg), pcell(m.cpu_p95, 60), pcell(m.disk_used_max, 75), h("td", { class: "n" }, usd(m.monthly_usd))))));
+  const eks = metrics("eks");
+  if (eks.length) svcTables.push(h("h2", {}, "EKS"), table(
+    [["Cluster"], ["Version"], ["Nodes", 1], ["Node types"], ["Requests CPU", 1], ["Requests mem", 1], ["Usage CPU", 1], ["Usage mem", 1], ["$/month", 1]],
+    eks.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.version || "–"), h("td", { class: "n" }, num(m.nodes)),
+      h("td", {}, m.node_types.map((t) => `${t.count} × ${t.type}${t.spot ? " (spot)" : ""}`).join(", ")),
+      pcell(m.requests_cpu_pct, 90, 40), pcell(m.requests_mem_pct, 90, 40), pcell(m.usage_cpu_pct), pcell(m.usage_mem_pct),
+      h("td", { class: "n" }, m.monthly_usd != null ? usd(m.monthly_usd) : "–")))));
+  const monthly = ((app.report && app.report.metrics) || []).filter((m) => m.kind !== "workflow").reduce((a, m) => a + (m.monthly_usd || 0), 0);
+  const savingAll = savingsTotal(all);
   const hot = all.filter((f) => f.severity !== "info" && !f.check.endsWith(".idle")).length;
   const idle = all.filter((f) => f.check.endsWith(".idle")).length;
   const roomy = all.filter((f) => f.severity === "info").length;
@@ -480,10 +586,21 @@ function utilization() {
     h("h1", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, parts.length ? `${parts[0][0].toUpperCase()}${parts[0].slice(1)}.` : "Capacity looks right."),
     h("p", { class: "verdict-sub" }, (parts.length > 1 ? `Also, ${parts.slice(1).join(" and ")}. ` : "")
       + `RDS, Redshift, ElastiCache and MSK are judged on ${days || 14} days of CloudWatch metrics; EKS on requests, capacity and current usage.`),
+    stats([["Monthly cost", `${usd(monthly)}/mo`], ["Potential savings", `${usd(savingAll)}/mo`, savingAll ? "save" : ""],
+           ["Running hot", num(hot), hot ? "warn" : ""], ["Idle", num(idle), idle ? "warn" : ""], ["Could be smaller", num(roomy)]]),
+    h("p", { class: "section-note" }, "Costs are on-demand list prices for compute (instances, nodes, brokers), not storage or data transfer."),
+    svcTables,
+    h("h2", {}, "Findings"),
     filters(draw, "Filter by account, service or name"),
     container,
     unseenNote(),
   ];
+}
+
+// A percent cell, colored when it's high (or, with a low mark, low).
+function pcell(v, high, low) {
+  const cls = v == null ? "" : high != null && v >= high ? "warn" : low != null && v < low ? "muted" : "";
+  return h("td", { class: `n ${cls}` }, v == null ? "–" : `${v}%`);
 }
 
 function pipelines() {
@@ -503,7 +620,7 @@ function pipelines() {
     h("h1", { class: `verdict${broken ? " bad" : ""}` }, broken ? `${plural(broken, "workflow is", "workflows are")} failing on the default branch.` : wfs.length ? "Pipelines are passing." : "No pipeline data yet."),
     h("p", { class: "verdict-sub" }, `Every workflow's last ${days} days. Success counts completed runs on all branches; "default" is the default branch only. Minutes are run time, close to billed minutes.`),
     stats([["Workflows", num(wfs.length)], ["Runs", num(runs)], ["Success", pctText(overall), overall != null && overall < 0.9 ? "warn" : ""],
-           ["CI minutes", num(minutes)], ["Failing now", num(broken), broken ? "bad" : ""]]),
+           ["CI minutes", num(minutes)], ["CI cost / 30 days", usd(ciCost())], ["Failing now", num(broken), broken ? "bad" : ""]]),
     sourceProblems("repo"),
     repos.map((repo) => {
       const rows = wfs.filter((w) => w.repo === repo).sort((a, b) => b.minutes - a.minutes);
@@ -580,7 +697,7 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, access, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 function currentView() {
@@ -596,6 +713,11 @@ function render() {
     if (v === view) a.setAttribute("aria-current", "page");
     const old = a.querySelector(".count");
     if (old) old.remove();
+    if (app.report && v === "actions") {
+      const g = actionGroups();
+      const n = g[0].items.length + g[1].items.length + g[2].items.length;
+      if (n) a.append(h("span", { class: "count" }, String(n)));
+    }
     if (app.report && v === "sources") {
       const n = sources().filter((x) => !x.ok).length;
       if (n) a.append(h("span", { class: "count" }, String(n)));
