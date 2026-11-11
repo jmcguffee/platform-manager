@@ -1,7 +1,6 @@
 # Real config holds account IDs, cluster names and tenant details. Never commit it.
 config.yaml
 !config.example.yaml
-config.toml
 *.local.yaml
 reports/
 dashboard.html
