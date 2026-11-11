@@ -26,18 +26,42 @@ class Cluster:
     expected_role: str = ""  # substring of the assumed-role ARN, e.g. "PlatformAdmin"
     pim_group: str = ""  # Entra group to activate in PIM for this access
     region: str = ""
+    eks_cluster: str = ""  # EKS cluster name, when the context name is an alias
     argocd_namespace: str = "argocd"
+
+    def eks_target(self):
+        """(cluster name, region) for EKS API calls, from config or the context ARN."""
+        name, region = self.eks_cluster, self.region
+        if self.context.startswith("arn:aws:eks:") and ":cluster/" in self.context:
+            parts = self.context.split(":")
+            region = region or parts[3]
+            name = name or self.context.rsplit("/", 1)[-1]
+        return (name, region) if name and region else None
+
+
+@dataclass
+class Account:
+    """An AWS profile to check that isn't tied to a cluster."""
+
+    name: str
+    aws_profile: str
+    expected_role: str = ""
+    pim_group: str = ""
 
 
 @dataclass
 class Repo:
-    name: str
+    name: str  # "repo" (in github.org) or "owner/repo"
     kind: str = "other"
+
+    def owner(self, default):
+        return self.name.split("/", 1)[0] if "/" in self.name else default
 
 
 @dataclass
 class Config:
     clusters: list[Cluster]
+    accounts: list[Account] = field(default_factory=list)
     pim_url: str = DEFAULT_PIM_URL
     session_hours: float = 8
     warn_minutes: int = 30
@@ -47,6 +71,13 @@ class Config:
     lookback_days: int = 14
     max_runs_per_repo: int = 300
     path: Path | None = None
+
+    def target(self, name):
+        """A cluster or account by name, for commands like `pmgr login` that work on either."""
+        for a in self.accounts:
+            if a.name == name:
+                return a
+        return self.cluster(name)
 
     def cluster(self, name):
         for c in self.clusters:
@@ -88,12 +119,18 @@ def parse(data, path=None):
         if r.kind not in REPO_KINDS:
             raise ConfigError(f"github.repos '{r.name}': kind must be one of {sorted(REPO_KINDS)}")
 
+    profiles = aws.get("profiles", [])
+    if not isinstance(profiles, list) or not all(isinstance(p, str) for p in profiles):
+        raise ConfigError("aws.profiles must be a list of profile names")
+    accounts = [Account(name=p, aws_profile=p) for p in profiles]
+
     refresh = aws.get("refresh_command", Config.__dataclass_fields__["refresh_command"].default_factory())
     if not isinstance(refresh, list) or not all(isinstance(p, str) for p in refresh) or not refresh:
         raise ConfigError("aws.refresh_command must be a list of strings, e.g. ['aws', 'sso', 'login']")
 
     return Config(
         clusters=clusters,
+        accounts=accounts,
         pim_url=pim.get("activation_url", DEFAULT_PIM_URL),
         session_hours=pim.get("session_hours", 8),
         warn_minutes=pim.get("warn_minutes", 30),

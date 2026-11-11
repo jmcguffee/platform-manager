@@ -22,6 +22,7 @@ AREAS = ("access", "argo", "pipelines", "workflows")
 class Sweep:
     findings: list = field(default_factory=list)
     statuses: list = field(default_factory=list)
+    accounts: list = field(default_factory=list)  # [(Account, AuthStatus)] for profiles without a cluster
     usage: dict = field(default_factory=dict)  # repo -> [(workflow, minutes)]
     unseen: list = field(default_factory=list)  # things we couldn't read, said out loud
 
@@ -92,6 +93,17 @@ def sweep(runner, cfg, areas=AREAS, repos=None, cluster_names=None):
     result = Sweep()
     chosen = [c for c in cfg.clusters if not cluster_names or c.name in cluster_names]
 
+    if "access" in want and not cluster_names:
+        covered = {c.aws_profile for c in cfg.clusters}
+        extra = [a for a in cfg.accounts if a.aws_profile not in covered]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            checked = pool.map(
+                lambda a: auth.check_profile(runner, a.aws_profile, a.expected_role, cfg.warn_minutes), extra
+            )
+            result.accounts = list(zip(extra, checked, strict=True))
+        for account, status in result.accounts:
+            result.findings += auth.findings_for(account, status, cfg)
+
     if want & {"access", "argo"} and chosen:
         result.statuses = clusters.check_all(runner, replace(cfg, clusters=chosen))
         if "access" in want:
@@ -107,14 +119,23 @@ def sweep(runner, cfg, areas=AREAS, repos=None, cluster_names=None):
                     result.unseen.append(f"{s.cluster.name}: Argo CD Applications (not readable)")
                 result.findings += argo.assess(s.cluster.name, apps)
 
-    targets = [r for r in cfg.repos if not repos or r.name in repos]
+    result.findings = auth.collapse_sessions(result.findings)
+
+    targets = [r for r in cfg.repos if not repos or r.name in repos or r.name.rsplit("/", 1)[-1] in repos]
     if want & {"pipelines", "workflows"} and targets:
         gh = GitHub(runner, cfg.github_org)
+        # Check each owner separately, so a SAML block on one org doesn't hide the others.
+        readable = []
+        for owner in dict.fromkeys(r.owner(cfg.github_org) for r in targets):
+            try:
+                gh.check_access(owner)
+                readable += [r for r in targets if r.owner(cfg.github_org) == owner]
+            except GitHubError as err:
+                result.findings.append(github_finding(owner, err))
         try:
-            gh.check_access()
             with ThreadPoolExecutor(max_workers=4) as pool:
                 for repo, (found, usage, unseen) in zip(
-                    targets, pool.map(lambda r: _repo(gh, cfg, r, want), targets), strict=True
+                    readable, pool.map(lambda r: _repo(gh, cfg, r, want), readable), strict=True
                 ):
                     result.findings += found
                     result.unseen += unseen

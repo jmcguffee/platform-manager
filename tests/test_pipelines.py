@@ -101,3 +101,12 @@ def test_explain_names_failed_step():
     }
     got = runfailure.explain(job, LOG)
     assert got["step"] == "Plan" and got["diagnosis"]["id"] == "tf_state_lock"
+
+
+def test_dynamic_workflows_get_stable_labels():
+    a, b = (
+        run(0, "success", path="dynamic/dependabot/dependabot-updates"),
+        run(1, "success", path="dynamic/dependabot/dependabot-updates"),
+    )
+    a["name"], b["name"] = "pip in /. - Update #1", "pip in /. - Update #2"
+    assert [name for name, _ in pipelines.usage([a, b])] == ["Dependabot"]

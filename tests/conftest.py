@@ -44,6 +44,12 @@ def identity(role="AWSReservedSSO_PlatformAdmin_abc123", account="111111111111")
     )
 
 
+@pytest.fixture(autouse=True)
+def no_real_aws_config(tmp_path, monkeypatch):
+    """Never read the developer's ~/.aws/config in tests."""
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "aws-config-absent"))
+
+
 @pytest.fixture
 def cfg():
     return parse(

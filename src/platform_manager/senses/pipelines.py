@@ -91,7 +91,7 @@ def assess(repo, branch, runs, explanations=None, days=14):
     explanations = explanations or {}
     found = []
     for workflow, rows in by_workflow(runs).items():
-        name = rows[0].get("name") or workflow
+        name = label(rows[0])
         where = f"{repo}:{workflow}"
         base = {"area": "pipeline", "resource": where}
 
@@ -187,13 +187,22 @@ def assess(repo, branch, runs, explanations=None, days=14):
     return found
 
 
+def label(run):
+    """A stable name for a run's workflow. GitHub-managed workflows (Dependabot, dependency graph)
+    get a new name every run, so they're labeled by their dynamic path instead."""
+    path = run.get("path") or ""
+    if path.startswith("dynamic/"):
+        return path.split("/")[1].replace("-", " ").capitalize()
+    return run.get("name") or path
+
+
 def usage(runs):
     """Approximate CI minutes per workflow, largest first, for the optimization summary."""
     totals = defaultdict(float)
     for r in runs:
         s = _seconds(r, "run_started_at", "updated_at")
         if s:
-            totals[r.get("name") or r.get("path")] += s / 60
+            totals[label(r)] += s / 60
     return sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
 
 

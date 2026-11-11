@@ -13,6 +13,8 @@ K8S_FORBIDDEN = "forbidden"
 K8S_UNAUTHORIZED = "unauthorized"
 K8S_UNREACHABLE = "unreachable"
 K8S_NO_CONTEXT = "no_context"
+K8S_GONE = "gone"  # EKS says the cluster doesn't exist
+K8S_NOT_ACTIVE = "not_active"  # creating, updating, deleting or failed
 K8S_SKIPPED = "skipped"  # AWS session is broken, so the cluster check would only repeat that
 K8S_UNKNOWN = "unknown"
 
@@ -81,6 +83,40 @@ def check_k8s(runner, cluster):
     return _classify_k8s(text), auth._first_line(r.stderr or r.stdout)
 
 
+def eks_state(runner, cluster):
+    """Ask EKS about an unreachable cluster. Returns (state or None, detail); None means ACTIVE or unknown."""
+    target = cluster.eks_target()
+    if not target:
+        return None, ""
+    name, region = target
+    r = runner.run(
+        [
+            "aws",
+            "eks",
+            "describe-cluster",
+            "--name",
+            name,
+            "--region",
+            region,
+            "--profile",
+            cluster.aws_profile,
+            "--query",
+            "cluster.status",
+            "--output",
+            "text",
+        ],
+        timeout=20,
+    )
+    if not r.ok:
+        if "resourcenotfoundexception" in r.output.lower():
+            return K8S_GONE, f"EKS cluster '{name}' doesn't exist in {region}"
+        return None, ""
+    status = r.stdout.strip()
+    if status and status != "ACTIVE":
+        return K8S_NOT_ACTIVE, f"EKS cluster '{name}' is {status}"
+    return None, ""
+
+
 def check_all(runner, cfg, now=None):
     # Several clusters can share one AWS profile. Check each profile once.
     profiles = {}
@@ -103,6 +139,13 @@ def check_all(runner, cfg, now=None):
         usable = [s for s in statuses if s.auth.state in (auth.OK, auth.EXPIRING)]
         for s, (state, detail) in zip(usable, pool.map(lambda s: check_k8s(runner, s.cluster), usable), strict=True):
             s.k8s, s.detail = state, detail
+        # "No such host" for a deleted cluster looks just like a VPN problem. Ask EKS which it is.
+        unreachable = [s for s in usable if s.k8s == K8S_UNREACHABLE]
+        for s, (state, detail) in zip(
+            unreachable, pool.map(lambda s: eks_state(runner, s.cluster), unreachable), strict=True
+        ):
+            if state:
+                s.k8s, s.detail = state, detail
 
     active = current_context(runner)
     for s in statuses:
@@ -115,7 +158,27 @@ def findings_for(status, cfg):
     found = auth.findings_for(c, status.auth, cfg)
     base = {"area": "cluster", "resource": c.name, "evidence": {"context": c.context}}
 
-    if status.k8s == K8S_UNREACHABLE:
+    if status.k8s == K8S_GONE:
+        found.append(
+            Finding(
+                "cluster.gone",
+                Severity.WARNING,
+                message=f"{status.detail}. The kubeconfig context is stale.",
+                fix=f"Remove it with `kubectl config delete-context {c.context}` and drop '{c.name}' from your config.",
+                **base,
+            )
+        )
+    elif status.k8s == K8S_NOT_ACTIVE:
+        found.append(
+            Finding(
+                "cluster.not_active",
+                Severity.WARNING,
+                message=status.detail,
+                fix="Wait for the operation to finish, or check the cluster's health in the EKS console.",
+                **base,
+            )
+        )
+    elif status.k8s == K8S_UNREACHABLE:
         found.append(
             Finding(
                 "cluster.unreachable",

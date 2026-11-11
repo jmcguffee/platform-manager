@@ -27,17 +27,21 @@ def _c(code, text, on):
     return f"\033[{code}m{text}\033[0m" if on else text
 
 
-def status_rows(statuses, now=None):
+def _session(a, now=None):
+    left = a.minutes_left(now)
+    return {
+        auth.OK: f"ok, {left // 60}h{left % 60:02d}m left" if left is not None else "ok",
+        auth.EXPIRING: f"expiring, {max(left or 0, 0)}m left",
+    }.get(a.state, a.state.replace("_", " "))
+
+
+def status_rows(statuses, accounts=(), now=None):
     rows = []
-    for s in statuses:
-        a = s.auth
-        left = a.minutes_left(now)
-        session = {
-            auth.OK: f"ok, {left // 60}h{left % 60:02d}m left" if left is not None else "ok",
-            auth.EXPIRING: f"expiring, {max(left or 0, 0)}m left",
-        }.get(a.state, a.state.replace("_", " "))
+    for s in statuses or []:
         k8s = s.k8s.replace("_", " ") if s.k8s != clusters.K8S_SKIPPED else "-"
-        rows.append(("*" if s.current else "", s.cluster.name, session, k8s, s.cluster.context))
+        rows.append(("*" if s.current else "", s.cluster.name, _session(s.auth, now), k8s, s.cluster.context))
+    for account, a in accounts or []:
+        rows.append(("", account.name, _session(a, now), "-", f"(account {a.account or account.aws_profile})"))
     return rows
 
 
@@ -48,13 +52,13 @@ def table(rows, headers, stream=None):
         print("  ".join(str(v).ljust(w) for v, w in zip(row, widths, strict=True)).rstrip(), file=stream)
 
 
-def terminal(findings, statuses=None, unseen=None, usage=None, stream=None, min_severity=Severity.INFO):
+def terminal(findings, statuses=None, unseen=None, usage=None, stream=None, min_severity=Severity.INFO, accounts=None):
     stream = stream or sys.stdout
     hidden = sum(f.severity < min_severity for f in findings)
     findings = [f for f in findings if f.severity >= min_severity]
     on = _color_on(stream)
-    if statuses:
-        table(status_rows(statuses), ("", "CLUSTER", "AWS SESSION", "KUBERNETES", "CONTEXT"), stream)
+    if statuses or accounts:
+        table(status_rows(statuses, accounts), ("", "NAME", "AWS SESSION", "KUBERNETES", "CONTEXT"), stream)
         print(file=stream)
     if not findings:
         print(_c("32", "No warnings or errors." if hidden else "No problems found.", on), file=stream)
@@ -79,7 +83,7 @@ def terminal(findings, statuses=None, unseen=None, usage=None, stream=None, min_
         print(_c("2", "\nCouldn't read (no findings reported for these): " + "; ".join(unseen), on), file=stream)
 
 
-def as_json(findings, statuses=None, unseen=None, usage=None):
+def as_json(findings, statuses=None, unseen=None, usage=None, accounts=None):
     return json.dumps(
         {
             "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -95,6 +99,10 @@ def as_json(findings, statuses=None, unseen=None, usage=None):
                 }
                 for s in statuses or []
             ],
+            "accounts": [
+                {"name": acct.name, "profile": acct.aws_profile, "aws": a.state, "arn": a.arn, "account": a.account}
+                for acct, a in accounts or []
+            ],
             "findings": [f.to_dict() for f in findings],
             "usage_minutes": {repo: dict(rows) for repo, rows in (usage or {}).items()},
             "unseen": unseen or [],
@@ -103,13 +111,13 @@ def as_json(findings, statuses=None, unseen=None, usage=None):
     )
 
 
-def as_markdown(findings, statuses=None, unseen=None, usage=None):
+def as_markdown(findings, statuses=None, unseen=None, usage=None, accounts=None):
     out = [f"# Platform report, {datetime.now(UTC):%B %-d, %Y %H:%M} UTC", ""]
     counts = {s: sum(f.severity == s for f in findings) for s in Severity}
     out.append(" · ".join(f"**{counts[s]}** {s}" for s in reversed(Severity)))
-    if statuses:
-        out += ["", "## Clusters", "", "| | Cluster | AWS session | Kubernetes |", "|---|---|---|---|"]
-        out += [f"| {cur} | {name} | {sess} | {k8s} |" for cur, name, sess, k8s, _ in status_rows(statuses)]
+    if statuses or accounts:
+        out += ["", "## Access", "", "| | Name | AWS session | Kubernetes |", "|---|---|---|---|"]
+        out += [f"| {cur} | {name} | {sess} | {k8s} |" for cur, name, sess, k8s, _ in status_rows(statuses, accounts)]
     area = None
     for f in findings:
         if f.area != area:

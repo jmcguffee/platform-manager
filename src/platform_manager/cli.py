@@ -23,12 +23,14 @@ def _exit_code(findings):
 def _emit(args, result):
     fmt = getattr(args, "format", "text")
     if fmt == "json":
-        text = report.as_json(result.findings, result.statuses, result.unseen, result.usage)
+        text = report.as_json(result.findings, result.statuses, result.unseen, result.usage, result.accounts)
     elif fmt == "md":
-        text = report.as_markdown(result.findings, result.statuses, result.unseen, result.usage)
+        text = report.as_markdown(result.findings, result.statuses, result.unseen, result.usage, result.accounts)
     else:
         floor = Severity.INFO if getattr(args, "all", False) else Severity.WARNING
-        report.terminal(result.findings, result.statuses, result.unseen, result.usage, min_severity=floor)
+        report.terminal(
+            result.findings, result.statuses, result.unseen, result.usage, min_severity=floor, accounts=result.accounts
+        )
         return
     if getattr(args, "out", None):
         Path(args.out).write_text(text)
@@ -92,26 +94,33 @@ def cmd_env(args, cfg, runner):
 
 
 def cmd_login(args, cfg, runner):
-    target = cfg.cluster(args.cluster)
+    target = cfg.target(args.cluster)
     cmd = cfg.refresh_args(target)
     print(f"Running: {' '.join(cmd)}", file=sys.stderr)
     code = runner.interactive(cmd)
     if code != 0:
         print(f"Login command exited with {code}.", file=sys.stderr)
-    status = clusters.check_all(runner, _only(cfg, target))[0]
-    found = clusters.findings_for(status, cfg)
+    if target not in cfg.clusters:  # an account profile with no cluster
+        status = clusters.ClusterStatus(target, auth.check_profile(runner, target.aws_profile, target.expected_role))
+        found = auth.findings_for(target, status.auth, cfg)
+    else:
+        status = clusters.check_all(runner, _only(cfg, target))[0]
+        found = clusters.findings_for(status, cfg)
     if not found:
         print(f"{target.name}: AWS session and cluster access are OK.", file=sys.stderr)
         return 0
     report.terminal(found)
-    if status.auth.state == auth.NO_ACCESS:
+    if status.auth.state == auth.NO_ACCESS and cfg.pim_url:
         print(f"\nThe role isn't active yet. Activate it in PIM: {cfg.pim_url}", file=sys.stderr)
     return _exit_code(found)
 
 
 def cmd_jit(args, cfg, runner):
+    if not cfg.pim_url:
+        print("No PIM activation URL is configured ([pim] activation_url is empty).", file=sys.stderr)
+        return 2
     if args.cluster:
-        c = cfg.cluster(args.cluster)
+        c = cfg.target(args.cluster)
         if c.pim_group:
             print(f"Activate PIM group: {c.pim_group}")
     print(cfg.pim_url)
@@ -149,7 +158,11 @@ def discover_clusters(runner):
         if "eks" not in " ".join(args_) and ":eks:" not in name:
             continue
         short = name.rsplit("/", 1)[-1]
-        found.append({"name": short, "context": name, "aws_profile": profile or "SET-ME", "region": region})
+        eks = args_[args_.index("--cluster-name") + 1] if "--cluster-name" in args_[:-1] else ""
+        entry = {"name": short, "context": name, "aws_profile": profile or "SET-ME", "region": region}
+        if eks and not name.startswith("arn:aws:eks:"):
+            entry["eks_cluster"] = eks  # an alias context doesn't name its cluster, so record it
+        found.append(entry)
     return found
 
 

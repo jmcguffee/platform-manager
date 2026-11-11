@@ -4,10 +4,11 @@
 and tells you what's wrong in plain English. When it's certain of the cause, it
 tells you the fix.
 
-- **Access:** Is each AWS session alive, how long is left in its PIM window, and
-  can you reach each cluster? When you can't, it says why: expired session,
-  role not activated in Azure PIM, VPN, missing EKS access entry. It links you
-  to the PIM activation page.
+- **Access:** Is each AWS session alive, and can you reach each cluster? When you
+  can't, it says why: expired SSO session (one finding per session, not per
+  profile), role not activated in Azure PIM or not assigned in IAM Identity
+  Center, VPN, missing EKS access entry, or a cluster that no longer exists.
+  With PIM configured, it links you to the activation page.
 - **Clusters:** Switch kubectl contexts only after the target passes its checks.
 - **Argo CD:** Failed syncs, degraded or missing apps, syncs stuck mid-operation,
   render errors, and apps with auto-sync on that still won't converge.
@@ -43,7 +44,9 @@ That pre-fills a block for each EKS context in your kubeconfig. Open the file an
 for each cluster, check `aws_profile`, then set `expected_role` (part of the
 role name, such as `PlatformAdmin`) and `pim_group` (the Entra group you activate).
 Then list your repos under `[github]` with a `kind` of `terraform`, `gitops`,
-`app` or `other`. [`config.example.toml`](src/platform_manager/config.example.toml)
+`app` or `other`. Use `owner/repo` for a repo outside `github.org`. SSO accounts
+that have no cluster go in `[aws] profiles`. If you don't use PIM, set
+`activation_url = ""`. [`config.example.toml`](src/platform_manager/config.example.toml)
 documents every setting.
 
 The config holds account IDs and names, so it stays out of this repo. `.gitignore`
@@ -131,9 +134,11 @@ the seam for what comes next:
   `pip-audit` and CodeQL, and Dependabot proposes updates after a 14-day cooldown.
 - Every workflow action is pinned to a commit SHA.
 - External commands run as argument lists with no shell, through `runner.py`.
-- Credentials never leave the AWS CLI. To show time left in a session, `pmgr`
-  reads only the `Expiration` field from `aws configure export-credentials` and
-  discards the rest.
+- Credentials never leave the AWS CLI. For profiles with static or process
+  credentials, `pmgr` shows time left by reading only the `Expiration` field from
+  `aws configure export-credentials`. SSO and assume-role profiles renew their
+  role credentials, so their true end (the SSO session or PIM window) isn't
+  visible locally, and `pmgr` doesn't guess.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.
 

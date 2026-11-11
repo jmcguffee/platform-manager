@@ -24,6 +24,10 @@ class GitHub:
         self.runner = runner
         self.org = org
 
+    def _slug(self, name):
+        owner, _, repo = name.rpartition("/")
+        return f"{quote(owner or self.org)}/{quote(repo)}"
+
     def _get(self, path, raw=False, timeout=30):
         args = ["gh", "api", "--method", "GET"]
         if raw:
@@ -45,22 +49,23 @@ class GitHub:
             return None
         raise GitHubError(r.output.strip()[:300])
 
-    def check_access(self):
-        """Raise GitHubError if we can't read the org at all."""
-        if self._get(f"orgs/{quote(self.org)}") is None:
+    def check_access(self, owner=None):
+        """Raise GitHubError if we can't read the org (or user) at all."""
+        owner = owner or self.org
+        if self._get(f"orgs/{quote(owner)}") is None:
             # Not visible as an org: may be a user account. Try that before failing.
-            if self._get(f"users/{quote(self.org)}") is None:
-                raise GitHubError(f"Can't see '{self.org}' on GitHub with this token", "auth")
+            if self._get(f"users/{quote(owner)}") is None:
+                raise GitHubError(f"Can't see '{owner}' on GitHub with this token", "auth")
 
     def repo(self, name):
-        return self._get(f"repos/{quote(self.org)}/{quote(name)}")
+        return self._get(f"repos/{self._slug(name)}")
 
     def runs(self, name, days, limit):
         since = (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%d")
         out, page = [], 1
         while len(out) < limit:
             data = self._get(
-                f"repos/{quote(self.org)}/{quote(name)}/actions/runs"
+                f"repos/{self._slug(name)}/actions/runs"
                 f"?per_page=100&page={page}&created=%3E%3D{since}&exclude_pull_requests=true"
             )
             if data is None:
@@ -73,15 +78,13 @@ class GitHub:
         return out[:limit]
 
     def jobs(self, name, run_id):
-        data = self._get(f"repos/{quote(self.org)}/{quote(name)}/actions/runs/{int(run_id)}/jobs?per_page=100")
+        data = self._get(f"repos/{self._slug(name)}/actions/runs/{int(run_id)}/jobs?per_page=100")
         return None if data is None else data.get("jobs", [])
 
     def job_log(self, name, job_id):
         """Logs expire and can be large. A failed fetch means no log, not a failed sweep."""
         try:
-            return self._get(
-                f"repos/{quote(self.org)}/{quote(name)}/actions/jobs/{int(job_id)}/logs", raw=True, timeout=60
-            )
+            return self._get(f"repos/{self._slug(name)}/actions/jobs/{int(job_id)}/logs", raw=True, timeout=60)
         except GitHubError as err:
             if err.kind != "error":
                 raise
@@ -89,13 +92,14 @@ class GitHub:
 
     def workflow_files(self, name):
         """Return {path: text} for .github/workflows, or None if we can't see them."""
-        listing = self._get(f"repos/{quote(self.org)}/{quote(name)}/contents/.github/workflows")
+        listing = self._get(f"repos/{self._slug(name)}/contents/.github/workflows")
         if listing is None:
-            return None
+            # A 404 on a repo we can read means there's no workflows directory: a real "none", not "unseen".
+            return {} if self.repo(name) is not None else None
         files = {}
         for item in listing:
             if item.get("type") == "file" and item["name"].endswith((".yml", ".yaml")):
-                text = self._get(f"repos/{quote(self.org)}/{quote(name)}/contents/{quote(item['path'])}", raw=True)
+                text = self._get(f"repos/{self._slug(name)}/contents/{quote(item['path'])}", raw=True)
                 if text is not None:
                     files[item["path"]] = text
         return files
