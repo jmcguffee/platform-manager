@@ -15,6 +15,11 @@ tells you the fix. `pmgr ui` shows everything as a dashboard in your browser.
   rollouts, NotReady or pressured nodes, Pending PVCs, failed Jobs, and recent Warning events that
   status doesn't explain (volume mounts, CNI out of IPs, webhooks rejecting pods, failing probes, HPA
   metrics, TargetGroupBinding errors). Grouped by workload, so one broken Deployment is one finding.
+- **Utilization:** Over- and under-used RDS, Redshift, ElastiCache and MSK, from 14 days of
+  CloudWatch metrics: oversized (with the size to move to), idle, running hot, low on storage
+  or memory, out of CPU credits, evicting keys. For EKS: nodes mostly empty or nearly full by
+  requests, workloads requesting far more than they use, containers near their memory limit,
+  idle nodes, and pods with no requests.
 - **Argo CD:** Failed syncs, degraded or missing apps, syncs stuck mid-operation,
   render errors, and apps with auto-sync on that still won't converge.
 - **Pipelines:** Workflows broken on the default branch right now (with the
@@ -81,6 +86,7 @@ pmgr login prod             # refresh the session, then re-check
 pmgr jit prod               # open the Azure PIM activation page
 
 pmgr workloads              # pods, nodes, controllers and Warning events
+pmgr utilization            # over- and under-used databases, caches, Kafka and EKS capacity
 pmgr argo                   # Argo CD health on every reachable cluster
 pmgr pipelines              # pipeline failures and workflow gaps
 pmgr doctor                 # everything, in the terminal
@@ -95,24 +101,30 @@ and cron.
 
 ### The dashboard
 
-`pmgr ui` runs every check (about 15 seconds), writes the dashboard to
-`~/.cache/platform-manager/dashboard.html` (mode 600) and opens it. It has six
-views:
+`pmgr ui` runs every check (about 30 seconds) and opens the dashboard in your browser.
+Click **Sync now** to run the checks again; the page redraws in place and keeps your view.
+Press Ctrl+C in the terminal to stop it. The views:
 
-- **Overview:** one sentence about what needs you, then an access chain for each
-  cluster (AWS session, Kubernetes, workloads, Argo CD), what to fix first, and
-  where CI time goes.
+- **Overview:** one sentence about what needs you, then an access chain for each cluster
+  (AWS session, Kubernetes, workloads, Argo CD), what to fix first, and where CI time goes.
 - **Access:** the chains and every access finding.
 - **Workloads:** problems by cluster and namespace, filterable.
+- **Utilization:** over- and under-used resources by account and service.
 - **Pipelines:** each repo's CI minutes and pipeline findings.
 - **Workflow gaps:** findings by repo, filterable by severity and text.
 - **Argo CD:** Application problems by cluster.
 
-Commands in a fix have a copy button. To refresh, run `pmgr ui` again.
+Commands in a fix have a copy button.
 
-The page is one self-contained file. Its Content-Security-Policy blocks every
-network request, so it can't send your data anywhere, and report values are
-inserted as text, never as HTML.
+The page is served from your machine only: `pmgr ui` listens on 127.0.0.1, every request needs
+the random token in the link it prints, requests with any other Host header are refused (which
+blocks DNS rebinding), and syncing needs a POST with the token header, which other websites can't
+send. The socket is held by a few lines of the perl that ships with macOS (falling back to `nc`);
+nothing extra is installed. The page's Content-Security-Policy allows requests to that server and
+nowhere else, and report values are inserted as text, never as HTML.
+
+`pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
+with no network access at all.
 
 ## How it decides
 
@@ -143,12 +155,14 @@ lib/pmgr/
   auth.sh             AWS session state per profile
   clusters.sh         API reachability, RBAC, deleted clusters, context switching
   argo.sh             Argo CD Application status
+  utilization.sh      CloudWatch and EKS capacity: over- and under-utilization
   workloads.sh        pods, controllers, nodes, volumes, jobs, Warning events
   github.sh           read-only GitHub API through gh
   pipelines.sh        run history: broken, unreliable, flaky, queued, slow
   runfailure.sh       the error line and certain fixes from a failed job's log
   workflows.sh        gaps in .github/workflows
   report.sh           terminal, Markdown, JSON and HTML output
+  serve.sh            the local dashboard server behind `pmgr ui`
   commands.sh         commands and options
   jq/                 the analysis itself, as jq programs
 share/pmgr/ui/        the dashboard page

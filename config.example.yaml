@@ -33,6 +33,17 @@ workloads:
   event_window_minutes: 60   # how far back to read Warning events (Kubernetes keeps about an hour)
   ignore_namespaces: []      # namespaces to skip, e.g. [sandbox]
 
+utilization:
+  lookback_days: 14     # CloudWatch history to judge by
+  cpu_low: 10           # average CPU % under which a resource counts as oversized...
+  cpu_low_peak: 30      # ...if its peaks also stay under this
+  cpu_high: 80          # p95 CPU % that counts as running hot
+  msk_cpu_high: 60      # MSK brokers: AWS recommends staying under 60%
+  storage_free_low: 15  # RDS free storage %
+  disk_high: 80         # Redshift disk used %
+  memory_high: 80       # ElastiCache memory used %
+  regions: {}           # region per profile when ~/.aws/config doesn't set one, e.g. {prod-platform: us-east-2}
+
 github:
   org: your-org
   lookback_days: 14

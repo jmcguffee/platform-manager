@@ -5,8 +5,9 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "access", "workloads", "pipelines", "workflows", "argo"];
-const AREAS = { access: ["auth", "cluster"], workloads: ["workload"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "access", "workloads", "utilization", "pipelines", "workflows", "argo"];
+const AREAS = { access: ["auth", "cluster"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
   ok: ["ok", "Signed in"],
@@ -30,7 +31,67 @@ const K8S_STATE = {
   skipped: ["off", "Not checked"],
 };
 
-const app = { report: null, sev: new Set(SEV), q: "" };
+const app = { report: null, sev: new Set(SEV), q: "", live: false, token: "", syncing: false, syncError: "" };
+
+// ---------- syncing (only when `pmgr ui` serves the page) ----------
+// The server answers one connection at a time and is briefly closed between them, so a refused
+// connection is retried a few times before it counts as "not running".
+async function api(path, method = "GET") {
+  for (let attempt = 0; ; attempt += 1) {
+    let r;
+    try {
+      r = await fetch(path, { method, headers: { "X-Pmgr-Token": app.token }, cache: "no-store" });
+    } catch (e) {
+      if (attempt >= 8) throw new Error("pmgr ui isn't running anymore. Start it again in your terminal.");
+      await new Promise((done) => setTimeout(done, 150 * (attempt + 1)));
+      continue;
+    }
+    if (!r.ok) throw new Error((await r.text()).trim() || `HTTP ${r.status}`);
+    return r.json();
+  }
+}
+
+async function sync() {
+  app.syncing = true;
+  app.syncError = "";
+  renderSync();
+  try {
+    await api("/api/sync", "POST");
+    const started = Date.now();
+    for (;;) {
+      await new Promise((done) => setTimeout(done, 2000));
+      const s = await api("/api/state");
+      if (!s.running) {
+        if (s.error) throw new Error(s.error);
+        // Redraw in place with the new report: the view, filters and scroll stay put.
+        app.report = await api("/api/report");
+        app.syncing = false;
+        const y = window.scrollY;
+        render();
+        window.scrollTo(0, y);
+        return;
+      }
+      if (Date.now() - started > 10 * 60 * 1000) throw new Error("The sync is taking more than 10 minutes.");
+    }
+  } catch (e) {
+    app.syncing = false;
+    app.syncError = e.message;
+    renderSync();
+  }
+}
+
+function renderSync() {
+  const slot = document.querySelector(".again");
+  if (!slot || !app.live) return;
+  const button = h("button", { type: "button", class: "sync", disabled: app.syncing }, app.syncing ? "Syncing…" : "Sync now");
+  button.addEventListener("click", sync);
+  slot.replaceChildren(button);
+  const banner = document.getElementById("sync-error");
+  if (banner) banner.remove();
+  if (app.syncError) {
+    document.getElementById("main").prepend(h("p", { class: "banner", id: "sync-error", role: "alert" }, `Sync didn't finish: ${app.syncError}`));
+  }
+}
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...kids) {
@@ -345,6 +406,39 @@ function workloads() {
   ];
 }
 
+function utilization() {
+  const all = inView("utilization");
+  const container = h("div");
+  const draw = () => {
+    const list = all.filter(passes);
+    // "account/service/resource": group by account and service.
+    const key = (f) => {
+      const [where, service] = f.resource.split("/");
+      return `${where} › ${SERVICE[service] || service}`;
+    };
+    container.replaceChildren(
+      ...(list.length ? grouped(list, key, () => true) : [h("p", { class: "empty" }, all.length ? "No findings match these filters." : "Nothing is notably over- or under-used.")]),
+    );
+  };
+  draw();
+  const hot = all.filter((f) => f.severity !== "info" && !f.check.endsWith(".idle")).length;
+  const idle = all.filter((f) => f.check.endsWith(".idle")).length;
+  const roomy = all.filter((f) => f.severity === "info").length;
+  const parts = [];
+  if (hot) parts.push(plural(hot, "resource is running hot", "resources are running hot"));
+  if (idle) parts.push(plural(idle, "looks idle", "look idle"));
+  if (roomy) parts.push(plural(roomy, "could be smaller", "could be smaller"));
+  const days = app.report.settings && app.report.settings.utilization_days;
+  return [
+    h("h1", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, parts.length ? `${parts[0][0].toUpperCase()}${parts[0].slice(1)}.` : "Capacity looks right."),
+    h("p", { class: "verdict-sub" }, (parts.length > 1 ? `Also, ${parts.slice(1).join(" and ")}. ` : "")
+      + `RDS, Redshift, ElastiCache and MSK are judged on ${days || 14} days of CloudWatch metrics; EKS on requests, capacity and current usage.`),
+    filters(draw, "Filter by account, service or name"),
+    container,
+    unseenNote(),
+  ];
+}
+
 function pipelines() {
   const list = inView("pipelines");
   const usage = app.report.usage_minutes || {};
@@ -411,7 +505,7 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, access, workloads, pipelines, workflows, argo };
+const RENDER = { overview, access, workloads, utilization, pipelines, workflows, argo };
 
 // ---------- shell ----------
 function currentView() {
@@ -442,11 +536,16 @@ function render() {
     return;
   }
   main.replaceChildren(...[RENDER[view]()].flat(3).filter(Boolean));
+  renderSync();
 }
 
 function start() {
   const embedded = document.getElementById("pmgr-data");
   if (embedded) app.report = JSON.parse(embedded.textContent);
+  if (document.getElementById("pmgr-live")) {
+    app.live = true;
+    app.token = new URLSearchParams(location.search).get("t") || "";
+  }
   window.addEventListener("hashchange", () => {
     render();
     window.scrollTo(0, 0);

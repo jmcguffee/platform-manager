@@ -125,7 +125,7 @@ h3 { font-size: 15px; margin: 24px 0 8px; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 14px; }
 .toolbar input[type="search"] {
   font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--rule-strong);
-  border-radius: 6px; padding: 5px 10px; min-width: min(260px, 100%);
+  border-radius: 6px; padding: 5px 10px; min-width: min(320px, 100%);
 }
 .chip { border-radius: 999px; padding: 4px 12px; }
 .chip[aria-pressed="false"] { color: var(--steel); border-style: dashed; }
@@ -204,3 +204,7 @@ details.group .findings { border-top: 0; margin-left: 22px; }
 .again { color: var(--steel); }
 .again code { font-size: 12px; }
 .group-body { margin-left: 22px; }
+
+.sync { font-weight: 600; }
+.sync:not([disabled]) { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.sync:not([disabled]):hover { opacity: 0.88; }

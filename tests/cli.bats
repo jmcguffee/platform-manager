@@ -92,7 +92,7 @@ EOF
 @test "the dashboard embeds the report, and data can't close its script tag" {
   fake 0 '{"items":[{"metadata":{"name":"</script><img src=x>"},"spec":{},"status":{"health":{"status":"Degraded"}}}]}' "" \
     kubectl --context ctx-staging --request-timeout=15s
-  run "$PMGR" ui --no-open
+  run "$PMGR" ui --file --no-open
   html="$XDG_CACHE_HOME/platform-manager/dashboard.html"
   [ -f "$html" ]
   [ "$(stat -f %Lp "$html" 2>/dev/null || stat -c %a "$html")" = 600 ]

@@ -18,6 +18,7 @@ report_build() {
       generated_at: (now | todateiso8601),
       settings: {
         lookback_days: ($config.github.lookback_days // 14),
+        utilization_days: ($config.utilization.lookback_days // 14),
         github_org: ($config.github.org // ""),
         pim_url: $pim,
         repos: [$config.github.repos // [] | .[] | {name, kind: (.kind // "other")}]
@@ -46,7 +47,7 @@ report_text() {
     def session: if .aws == "ok" then "ok" else (.aws | gsub("_"; " ")) end;
     {critical: "35", error: "31", warning: "33", info: "36"} as $colors
     | {critical: "CRIT", error: "ERR ", warning: "WARN", info: "INFO"} as $labels
-    | {auth: "Access", cluster: "Clusters", workload: "Workloads", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
+    | {auth: "Access", cluster: "Clusters", workload: "Workloads", utilization: "Utilization", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
     | ([.clusters[] | [(if .current then "*" else "" end), .name, session,
           (if .kubernetes == "skipped" then "-" else (.kubernetes | gsub("_"; " ")) end), .context]]
        + [.accounts[] | ["", .name, session, "-", "(account \(if .account == "" then .profile else .account end))"]]) as $rows
@@ -59,7 +60,7 @@ report_text() {
        else empty end),
       (if ($shown | length) == 0 then c("32"; if $hidden > 0 then "No warnings or errors." else "No problems found." end)
        else empty end),
-      ($shown | group_by(.area) | sort_by(.[0].area as $a | ["auth","cluster","workload","argo","pipeline","workflow"] | index($a))[]
+      ($shown | group_by(.area) | sort_by(.[0].area as $a | ["auth","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
         | c("1"; $titles[.[0].area] // .[0].area),
           (.[] | "  \(c($colors[.severity]; $labels[.severity])) \(.resource): \(.message)",
                  (if .fix != "" then "       fix: \(.fix)" else empty end),
@@ -77,7 +78,7 @@ report_text() {
 
 report_md() {
   jq -r '
-    {auth: "Access", cluster: "Clusters", workload: "Workloads", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
+    {auth: "Access", cluster: "Clusters", workload: "Workloads", utilization: "Utilization", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
     | (.findings | group_by(.severity) | map({(.[0].severity): length}) | add // {}) as $n
     | "# Platform report, \(.generated_at | fromdateiso8601 | strftime("%B %-d, %Y %H:%M")) UTC", "",
       ([["critical","error","warning","info"][] as $s | "**\($n[$s] // 0)** \($s)"] | join(", ")),
@@ -86,7 +87,7 @@ report_md() {
         (.clusters[] | "| \(if .current then "*" else "" end) | \(.name) | \(.aws | gsub("_"; " ")) | \(.kubernetes | gsub("_"; " ")) |"),
         (.accounts[] | "| | \(.name) | \(.aws | gsub("_"; " ")) | - |")
        else empty end),
-      (.findings | group_by(.area) | sort_by(.[0].area as $a | ["auth","cluster","workload","argo","pipeline","workflow"] | index($a))[]
+      (.findings | group_by(.area) | sort_by(.[0].area as $a | ["auth","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
         | "", "## \($titles[.[0].area] // .[0].area)", "",
           (.[] | "- **\(.severity)** `\(.resource)`: \(.message)"
                  + (if .fix != "" then "  \n  Fix: \(.fix)" else "" end)
@@ -100,16 +101,21 @@ report_md() {
   ' <<<"$1"
 }
 
-# report_html REPORT : the dashboard as one self-contained file with the report embedded.
+# report_html REPORT [live] : the dashboard as one self-contained file with the report embedded.
+# "live" is for `pmgr ui`'s server: the page may then call back to it (and only it) to sync.
 report_html() {
-  local ui="$PMGR_ROOT/share/pmgr/ui" data="$PMGR_TMP/report-embed.json"
+  local ui="$PMGR_ROOT/share/pmgr/ui" data="$PMGR_TMP/report-embed.json" live=0
+  [ "${2:-}" = live ] && live=1
   # Keep the JSON from closing the <script> element it sits in.
   jq -c . <<<"$1" | sed 's#</#<\\/#g' >"$data"
-  awk -v css="$ui/app.css" -v js="$ui/app.js" -v data="$data" '
+  awk -v css="$ui/app.css" -v js="$ui/app.js" -v data="$data" -v live="$live" \
+    -v csp_from="default-src 'none';" -v csp_to="default-src 'none'; connect-src 'self';" '
     /<link rel="stylesheet" href="app.css">/ {
       print "<style>"; while ((getline line < css) > 0) print line; print "</style>"; next
     }
+    /Content-Security-Policy/ && live == 1 { sub(csp_from, csp_to) }
     /<script src="app.js" defer><\/script>/ {
+      if (live == 1) print "<script id=\"pmgr-live\" type=\"application/json\">true</script>"
       printf "<script id=\"pmgr-data\" type=\"application/json\">"
       while ((getline line < data) > 0) print line
       print "</script>"
