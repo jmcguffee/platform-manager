@@ -1,0 +1,54 @@
+# .github/workflows/tgb-check.yml in platform-apps
+name: TargetGroupBinding check
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "platform/**"
+      - ".github/scripts/check_tgb.py"
+      - ".github/workflows/tgb-check.yml"
+
+permissions:
+  contents: read
+  id-token: write # lets the job assume the read-only AWS role through OIDC
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # One entry per environment. role_var names a repository variable that
+        # holds that environment's read-only role ARN. Leave the variable unset
+        # to run only the offline checks for that environment.
+        include:
+          - env: staging
+            role_var: TGB_CHECK_ROLE_STAGING
+          - env: prod
+            role_var: TGB_CHECK_ROLE_PROD
+    name: check (${{ matrix.env }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install 'pyyaml>=6.0.2' 'boto3>=1.35'
+
+      - name: Assume read-only AWS role
+        if: ${{ vars[matrix.role_var] != '' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars[matrix.role_var] }}
+          aws-region: us-east-1
+
+      - name: Check bindings
+        run: >
+          python .github/scripts/check_tgb.py
+          --discover .
+          --match "/overlays/${{ matrix.env }}/"
+          ${{ vars[matrix.role_var] != '' && '--aws' || '' }}

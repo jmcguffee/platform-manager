@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Real config holds account IDs, cluster names and tenant details. Never commit it.
+config.toml
+*.local.toml
+reports/
