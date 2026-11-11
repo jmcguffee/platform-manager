@@ -31,7 +31,7 @@ const K8S_STATE = {
   skipped: ["off", "Not checked"],
 };
 
-const app = { report: null, sev: new Set(SEV), q: "", live: false, token: "", syncing: false, syncError: "" };
+const app = { report: null, sev: new Set(SEV), q: "", everyone: false, live: false, token: "", syncing: false, syncError: "" };
 
 // ---------- syncing (only when `pmgr ui` serves the page) ----------
 // The server answers one connection at a time and is briefly closed between them, so a refused
@@ -411,7 +411,8 @@ function overview() {
            ["Potential savings", `${usd(saving)}/mo`, saving ? "save" : ""], ["Spend tracked", `${usd(spendTracked())}/mo`],
            ["CI success", pctText(ciSuccess())],
            ...(sources().some((x) => x.type === "datadog")
-             ? [["Open pages", num(metrics("page").filter((x) => !["resolved", "closed"].includes(x.status)).length)]] : [])]),
+             ? [["Open pages", num(metrics("page").filter((x) => !["resolved", "closed"].includes(x.status)).length)],
+                ...(metrics("shift").length ? [["On call now", (shiftsNow().filter(isMine)[0] || shiftsNow()[0] || { name: "Nobody" }).name]] : [])] : [])]),
     saving || bad ? h("p", { class: "more" }, h("a", { href: "#actions" }, "See every action item")) : null,
     h("h2", {}, "Access"),
     chains(),
@@ -487,6 +488,53 @@ function actions() {
   ];
 }
 
+// ---------- who's on call ----------
+function when(iso) {
+  return new Date(iso).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+function myPeople() { return (app.report.settings && app.report.settings.oncall_people) || []; }
+function isMine(shift) { const mine = myPeople(); return !mine.length || mine.includes((shift.email || "").toLowerCase()); }
+function shiftsNow() {
+  const t = Date.now();
+  return metrics("shift").filter((x) => Date.parse(x.start) <= t && Date.parse(x.end) > t);
+}
+
+function whoIsOnCall() {
+  const all = metrics("shift");
+  if (!all.length) return null;
+  const mine = myPeople();
+  const t = Date.now();
+  const days = (app.report.settings && app.report.settings.oncall_days) || 7;
+  const schedules = [...new Set(all.map((x) => x.schedule))];
+  const now = shiftsNow();
+  const cards = schedules.map((sch) => {
+    const cur = now.filter((x) => x.schedule === sch);
+    return h("div", { class: "oncall-card" },
+      h("small", {}, sch),
+      cur.length ? cur.map((x) => h("p", { class: `who${isMine(x) && mine.length ? " mine" : ""}` }, x.name, h("span", { class: "muted" }, ` until ${when(x.end)}`)))
+        : h("p", { class: "who none" }, "Nobody on call right now"));
+  });
+  const week = all.filter((x) => Date.parse(x.end) > t).filter((x) => app.everyone || isMine(x)).sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const toggle = mine.length ? h("button", { type: "button" }, app.everyone ? "Show only my people" : "Show everyone") : null;
+  if (toggle) toggle.addEventListener("click", () => { app.everyone = !app.everyone; render(); });
+  return [
+    h("h2", {}, "Who's on call"),
+    h("div", { class: "oncall-now" }, cards),
+    h("div", { class: "toolbar week-head" },
+      h("span", { class: "group-name" }, `Next ${days} days`),
+      mine.length ? h("span", { class: "tally" }, app.everyone ? "everyone" : `your ${plural(mine.length, "person", "people")} only`) : null, toggle),
+    week.length
+      ? table([["Who"], ["Schedule"], ["From"], ["To"], [""]], week.map((x) => {
+          const on = Date.parse(x.start) <= t && Date.parse(x.end) > t;
+          return h("tr", { class: on ? "row-now" : "" },
+            h("td", {}, h("b", {}, x.name), x.email ? h("small", { class: "muted" }, ` ${x.email}`) : null),
+            h("td", {}, x.schedule), h("td", {}, when(x.start)), h("td", {}, when(x.end)),
+            h("td", {}, on ? h("span", { class: "chip-s ok" }, "On call now") : ""));
+        }))
+      : h("p", { class: "empty" }, mine.length && !app.everyone ? `None of your people are on call in the next ${days} days.` : `No shifts in the next ${days} days.`),
+  ];
+}
+
 function oncall() {
   const src = sources().find((x) => x.type === "datadog");
   if (!src) {
@@ -514,6 +562,7 @@ function oncall() {
     ["Active incidents", num(incidents.filter((x) => x.state === "active").length), incidents.some((x) => x.state === "active") ? "bad" : ""],
     ["Alerting monitors", num(alerting.length), alerting.length ? "bad" : ""], ["Warning or no data", num(warns.length), warns.length ? "warn" : ""]]));
   out.push(sourceProblems("datadog"));
+  out.push(whoIsOnCall());
   const ago2 = (min) => (min == null ? "–" : min < 60 ? `${min}m` : min < 2880 ? `${Math.floor(min / 60)}h` : `${Math.floor(min / 1440)}d`);
   out.push(h("h2", {}, "Pages"), pages.length
     ? table([["Page"], ["Status"], ["Urgency"], ["Team"], ["Open for", 1]], pages.map((x) => h("tr", { class: x.status === "acknowledged" ? "" : "row-bad" },

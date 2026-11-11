@@ -246,3 +246,16 @@ section.repo .findings { margin-top: 12px; }
 .save { margin: 0 0 4px; font-weight: 600; color: var(--ok); font-size: 13.5px; }
 .group-note { margin: -4px 0 8px 22px; }
 .views { row-gap: 2px; }
+
+/* Who's on call */
+.oncall-now { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.oncall-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 12px 16px; }
+.oncall-card small { color: var(--steel); }
+.who { margin: 4px 0 0; font: 600 18px/1.3 var(--round); }
+.who.mine { color: var(--ok); }
+.who.none { color: var(--warn); }
+.who .muted { font: 400 13px var(--text); }
+.week-head { justify-content: flex-start; }
+.week-head button { margin-left: auto; }
+table.data tr.row-now td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+.stats dd { overflow-wrap: anywhere; }

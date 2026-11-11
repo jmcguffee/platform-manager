@@ -54,6 +54,9 @@ datadog:
   site: datadoghq.com   # the host you log in to, e.g. yourorg.datadoghq.com or datadoghq.eu
   teams: []             # on-call team handles to watch, e.g. [platform, sre]; empty = all pages
   # org: ""             # a named Pup org session, if you use several
+  schedules: []         # on-call schedules for "who's on call": names (wildcards ok, e.g. "OnePass*") or IDs; empty = all
+  people: []            # only show these people's shifts, e.g. your DevOps team's emails; empty = everyone
+  oncall_days: 7        # how far ahead to show
 
 github:
   org: your-org

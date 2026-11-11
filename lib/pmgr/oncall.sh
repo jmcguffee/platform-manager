@@ -39,6 +39,78 @@ dd_read() {
   case $(dd_classify "$(cat "$PMGR_TMP/dd/$key.err")") in auth) return 2 ;; unreachable) return 3 ;; *) return 1 ;; esac
 }
 
+# iso_add ISO SECONDS : an RFC 3339 time shifted by SECONDS.
+iso_add() { jq -rn --arg t "$1" --argjson d "$2" '$t | sub("\\.[0-9]+"; "") | fromdateiso8601 + $d | todateiso8601'; }
+iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601'; }
+
+# oncall_schedules : who's on call over the next datadog.oncall_days (default 7), for the configured
+# schedules (names with * wildcards, or IDs; empty = every schedule). Walks each schedule shift by
+# shift: ask who's on call at a time, then jump to when that shift ends. Writes shift rows as
+# metrics and prints a finding for any gap with nobody on call.
+oncall_schedules() {
+  local days now stop patterns pattern list="[]" key
+  days=$(cfg '.datadog.oncall_days // 7')
+  now=$(jq -rn --arg n "${PMGR_NOW:-}" '(if $n == "" then now else ($n | tonumber) end) | floor | todateiso8601')
+  stop=$(iso_add "$now" $((days * 86400)))
+  patterns=$(cfg '.datadog.schedules // [] | .[]')
+
+  if [ -z "$patterns" ]; then
+    dd_read sched-list api v2/on-call/schedules -F 'page[size]=100' || return 0
+    list=$(jq -c '[.data // [] | .[] | {id, name: (.attributes.name // .id)}]' "$PMGR_TMP/dd/sched-list.json")
+  else
+    while IFS= read -r pattern; do
+      [ -n "$pattern" ] || continue
+      key="sched-$(safe_key "$pattern")"
+      if printf '%s' "$pattern" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+        dd_read "$key" api "v2/on-call/schedules/$pattern" || continue
+        list=$(jq -c --argjson have "$list" '$have + [.data | {id, name: (.attributes.name // .id)}]' "$PMGR_TMP/dd/$key.json")
+      else
+        dd_read "$key" api v2/on-call/schedules -F "filter[query]=$pattern" -F 'page[size]=100' || continue
+        list=$(jq -c --argjson have "$list" '$have + [.data // [] | .[] | {id, name: (.attributes.name // .id)}]' "$PMGR_TMP/dd/$key.json")
+      fi
+    done <<<"$patterns"
+  fi
+  list=$(jq -c 'unique_by(.id)' <<<"$list")
+  [ "$(jq length <<<"$list")" -gt 0 ] || {
+    printf "Datadog: no on-call schedules matched %s\n" "$(cfg '.datadog.schedules // [] | join(", ")')" >>"$PMGR_TMP/unseen.txt"
+    return 0
+  }
+
+  local sid name at i rows next
+  while IFS=$'\t' read -r sid name; do
+    at=$now
+    rows="$PMGR_TMP/dd/shifts-$(safe_key "$sid").jsonl"
+    : >"$rows"
+    i=0
+    while [ "$i" -lt 60 ] && [ "$(iso_epoch "$at")" -lt "$(iso_epoch "$stop")" ]; do
+      key="resp-$(safe_key "$sid")-$i"
+      dd_read "$key" api "v2/on-call/schedules/$sid/responders" -F "filter[at_ts]=$at" \
+        -F 'filter[position]=current,next' -F 'include=responders.shifts.user' || break
+      jq -c --arg schedule "$name" --arg sid "$sid" -f "$PMGR_JQ/oncall_shifts.jq" "$PMGR_TMP/dd/$key.json" >>"$rows"
+      # Jump to the end of the current shift, or to the start of the next one if nobody is on now.
+      next=$(jq -rs --arg at "$at" '
+        (map(select(.position == "current") | .end) | max) // (map(select(.position == "next") | .start) | min) // empty' \
+        <(jq -c --arg schedule "$name" --arg sid "$sid" -f "$PMGR_JQ/oncall_shifts.jq" "$PMGR_TMP/dd/$key.json"))
+      [ -n "$next" ] || break
+      [ "$(iso_epoch "$next")" -gt "$(iso_epoch "$at")" ] || break
+      at=$(jq -rn --arg t "$next" '$t | sub("\\.[0-9]+"; "")')
+      i=$((i + 1))
+    done
+    # One row per shift, then any gap with nobody on call inside the window.
+    jq -sc 'unique_by([.start, .end, .user_id]) | sort_by(.start) | .[]' "$rows" | metric_rows
+    jq -sc --arg now "$now" --arg stop "$stop" --arg name "$name" '
+      def e: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
+      unique_by([.start, .end, .user_id]) | sort_by(.start)
+      | [range(0; length - 1) as $i | {from: .[$i].end, to: .[$i + 1].start}
+         | select((.from | e) < (.to | e) and (.from | e) < ($stop | e) and (.to | e) > ($now | e))] as $gaps
+      | $gaps[] | {check: "oncall.schedule_gap", severity: "warning", area: "oncall",
+          resource: "schedule/\($name)", link: "", evidence: {},
+          message: "Nobody is on call for \($name) from \(.from[0:16] | sub("T"; " ")) to \(.to[0:16] | sub("T"; " ")) UTC",
+          fix: "Add a layer or an override in Datadog On-Call so the gap is covered."}' "$rows"
+  done < <(jq -r '.[] | [.id, .name] | @tsv' <<<"$list")
+  return 0
+}
+
 oncall_sweep() {
   [ "$(cfg '.datadog | type')" = object ] || return 0
   PUP=$(cfg '.datadog.pup // "pup"')
@@ -90,6 +162,7 @@ oncall_sweep() {
   [ "$code" -eq 0 ] || unread="$unread pages"
   dd_read incidents incidents list --query 'state:(active OR stable)' --limit 100 || unread="$unread incidents"
   dd_read monitors monitors search --query 'status:(alert OR warn OR "no data")' --per-page 200 || unread="$unread monitors"
+  oncall_schedules
 
   jq -cn --argjson pages "{\"data\": $pages}" --slurpfile incidents "$PMGR_TMP/dd/incidents.json" \
     --slurpfile monitors "$PMGR_TMP/dd/monitors.json" '{pages: $pages, incidents: $incidents[0], monitors: $monitors[0]}' |

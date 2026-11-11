@@ -24,6 +24,8 @@ report_build() {
         lookback_days: ($config.github.lookback_days // 14),
         utilization_days: ($config.utilization.lookback_days // 14),
         ci_usd_per_minute: ($config.cost.actions_usd_per_minute // 0.008),
+        oncall_people: [($config.datadog.people // [])[] | ascii_downcase],
+        oncall_days: ($config.datadog.oncall_days // 7),
         github_org: ($config.github.org // ""),
         pim_url: $pim,
         repos: [$config.github.repos // [] | .[] | {name, kind: (.kind // "other")}]

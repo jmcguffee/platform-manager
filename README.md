@@ -20,7 +20,9 @@ tells you the fix. `pmgr ui` shows everything as a dashboard in your browser.
   or memory, out of CPU credits, evicting keys. For EKS: nodes mostly empty or nearly full by
   requests, workloads requesting far more than they use, containers near their memory limit,
   idle nodes, and pods with no requests.
-- **On-call (Datadog):** Unacknowledged and open pages, active and stable incidents by
+- **On-call (Datadog):** Who's on call now and for the next 7 days on your schedules,
+  filterable to the people you care about (for example your DevOps team on a company-wide
+  schedule), and any gap with nobody on call. Also unacknowledged and open pages, active and stable incidents by
   severity, and monitors alerting, warning or missing data, read through Datadog's CLI, Pup,
   with every call read-only. It also says when Pup isn't logged in and how to fix it.
 - **Argo CD:** Failed syncs, degraded or missing apps, syncs stuck mid-operation,
@@ -67,8 +69,17 @@ brew install datadog-labs/pack/pup
 pup auth login --site yourorg.datadoghq.com
 ```
 
-Then add a `datadog` section to your config with the same site, and optionally the on-call
-teams to watch (see [`config.example.yaml`](config.example.yaml)). `pmgr` calls Pup with
+Then add a `datadog` section to your config with the same site. To see who's on call, name the
+schedules (wildcards work) and, optionally, the people to show:
+
+```yaml
+datadog:
+  site: yourorg.datadoghq.com
+  schedules: ["OnePass*"]            # or schedule IDs; empty = every schedule
+  people: [maya@yourorg.com, priya@yourorg.com]   # e.g. your DevOps team; empty = everyone
+```
+
+See [`config.example.yaml`](config.example.yaml) for the rest. `pmgr` calls Pup with
 `--read-only` every time.
 
 ## Set up
