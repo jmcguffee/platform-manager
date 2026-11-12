@@ -78,7 +78,7 @@ pf_alive() { # NAME : 0 if its port-forward process is still running
 
 # pf_start CLUSTER_NAME : start (or reuse) the Argo CD port-forward; prints {name, url, pid, reused}.
 pf_start() {
-  local name=$1 c ctx profile ns svc port remote scheme key dir log pid i
+  local name=$1 c ctx profile ns svc port remote scheme key dir log pid i sel PF_FOUND_NOTE=""
   c=$(diag_cluster "$name")
   [ -n "$c" ] || { printf '{"error": "No cluster named %s in your config."}\n' "$name"; return 1; }
   dir=$(pf_dir)
@@ -97,10 +97,35 @@ pf_start() {
 
   # Use the service's https port if it has one (443), else http (80, for server.insecure).
   if ! capture "$key-svc" env AWS_PROFILE="$profile" kubectl --context "$ctx" --request-timeout=15s get svc "$svc" -n "$ns" -o json; then
-    jq -cn --arg e "$(first_line "$(err "$key-svc")")" --arg svc "$svc" --arg ns "$ns" --arg name "$name" \
-      '{error: "Can'"'"'t read service \($svc) in \($ns) on \($name): \($e)"}'
-    return 1
+    if ! err "$key-svc" | grep -qiE 'NotFound|not found'; then
+      jq -cn --arg e "$(first_line "$(err "$key-svc")")" --arg svc "$svc" --arg ns "$ns" --arg name "$name" \
+        '{error: "Can'"'"'t read service \($svc) in \($ns) on \($name): \($e)"}'
+      return 1
+    fi
+    # Not where the config says: find it by Argo CD's own labels. The Helm chart names it
+    # <release>-argocd-server, often in an argo-cd namespace.
+    local found=""
+    for sel in app.kubernetes.io/name=argocd-server "app.kubernetes.io/component=server,app.kubernetes.io/part-of=argocd"; do
+      if capture "$key-find" env AWS_PROFILE="$profile" kubectl --context "$ctx" --request-timeout=15s get svc -A -l "$sel" -o json &&
+        [ "$(jq '.items | length' "$PMGR_TMP/$key-find.out")" -gt 0 ]; then
+        found=$(jq -c '.items' "$PMGR_TMP/$key-find.out")
+        break
+      fi
+    done
+    if [ -z "$found" ]; then
+      jq -cn --arg svc "$svc" --arg ns "$ns" --arg name "$name" \
+        '{error: "No Argo CD on \($name): there'"'"'s no service \($svc) in \($ns), and no service labeled app.kubernetes.io/name=argocd-server in any namespace. If one Argo CD manages every environment, open it from the cluster it runs on (and set argocd_namespace and argocd_service there if they differ)."}'
+      return 1
+    fi
+    ns=$(jq -r '.[0].metadata.namespace' <<<"$found") svc=$(jq -r '.[0].metadata.name' <<<"$found")
+    jq '.[0]' <<<"$found" >"$PMGR_TMP/$key-svc.out"
+    PF_FOUND_NOTE="Found Argo CD at $ns/svc/$svc; set argocd_namespace: $ns and argocd_service: $svc for this cluster to skip the search.$([ "$(jq length <<<"$found")" -gt 1 ] && printf ' (There are %s Argo CD servers; set those to pick another.)' "$(jq length <<<"$found")")"
   fi
+  # Served under a path (server.rootpath, e.g. /argocd)? Then the link needs it.
+  local rootpath
+  rootpath=$(env AWS_PROFILE="$profile" kubectl --context "$ctx" --request-timeout=10s get configmap argocd-cmd-params-cm -n "$ns" \
+    -o 'jsonpath={.data.server\.rootpath}' 2>/dev/null | tr -cd 'A-Za-z0-9/_.-')
+  rootpath=${rootpath#/}; rootpath=${rootpath%/}
   # Only TCP ports can be forwarded. Prefer one named https (or 443), then http (or 80), then any TCP port.
   read -r remote scheme < <(out "$key-svc" | jq -r '
     [.spec.ports[] | select((.protocol // "TCP") == "TCP") | {p: .port, name: (.name // "")}] as $ports
@@ -141,10 +166,11 @@ pf_start() {
     return 1
   fi
   scheme=$answered
-  jq -cn --arg name "$name" --arg url "$scheme://$(pf_host "$name"):$port" --argjson pid "$pid" --arg ctx "$ctx" --arg svc "$svc" \
-    --arg ns "$ns" --argjson port "$port" \
-    --arg alt "$scheme://127.0.0.1:$port" \
-    '{name: $name, url: $url, alt_url: $alt, pid: $pid, port: $port, context: $ctx, target: "\($ns)/svc/\($svc)", started_at: (now | todateiso8601), reused: false}' \
+  jq -cn --arg name "$name" --arg url "$scheme://$(pf_host "$name"):$port/${rootpath:+$rootpath/}" --argjson pid "$pid" --arg ctx "$ctx" --arg svc "$svc" \
+    --arg ns "$ns" --argjson port "$port" --arg note "${PF_FOUND_NOTE:-}" \
+    --arg alt "$scheme://127.0.0.1:$port/${rootpath:+$rootpath/}" \
+    '{name: $name, url: $url, alt_url: $alt, pid: $pid, port: $port, context: $ctx, target: "\($ns)/svc/\($svc)", started_at: (now | todateiso8601), reused: false}
+     + (if $note != "" then {note: $note} else {} end)' \
     | tee "$dir/$name.json"
   printf '%s\n' "$port" >"$dir/$name.port"
 }
@@ -309,6 +335,7 @@ cmd_pf() {
           printf '%s: %s\n' "$n" "$(jq -r .error <<<"$result")" >&2
         else
           printf '%s: Argo CD at %s%s\n' "$n" "$(jq -r .url <<<"$result")" "$(jq -r 'if .reused then " (already running)" else "" end' <<<"$result")"
+          jq -r '.note // empty | "  \(.)"' <<<"$result"
           if [ -n "$(jq -r '.argocd_secret // empty' <<<"$(diag_cluster "$n")")" ]; then pf_login_say "$n"; fi
           [ "$no_open" -eq 1 ] || open_url "$(jq -r .url <<<"$result")"
         fi

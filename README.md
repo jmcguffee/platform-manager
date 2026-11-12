@@ -209,6 +209,12 @@ pods, what `dev.localhost` resolves to, and your proxy settings. If the request 
 works but the browser still can't connect, a proxy is taking `dev.localhost`: use the
 `127.0.0.1` link under the button, or add `*.localhost` to the proxy's bypass list.
 
+If the service isn't where the config says (`argocd-server` in `argocd` by default), pmgr finds it
+by Argo CD's own labels, which covers Helm installs (`<release>-argocd-server`, often in `argo-cd`),
+and tells you what to set. If Argo CD is served under a path (`server.rootpath`, like `/argocd`), the
+link includes it. A cluster with no Argo CD says so; if one Argo CD manages every environment, open
+it from the cluster it runs on.
+
 Ports: `argocd_port` fixes one. Otherwise pmgr reuses the port it used last time, else 8080, 8081, …
 in config order, and if that one is taken, a free port the OS picks.
 

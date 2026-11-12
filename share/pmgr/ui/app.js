@@ -232,7 +232,7 @@ async function tunnelAction(name, action) {
     const r = await api(path, "POST", { cluster: name });
     if (r.error) throw new Error(r.error);
     if (action === "login") app.tunnelNote[name] = { ok: `Password for ${r.username} copied. It clears from the clipboard in ${r.clears_in}s.` };
-    if (action === "start") app.tunnelNote[name] = { ok: r.reused ? "Already running." : `Tunnel up on port ${r.port}.` };
+    if (action === "start") app.tunnelNote[name] = { ok: (r.reused ? "Already running." : `Tunnel up on port ${r.port}.`) + (r.note ? ` ${r.note}` : "") };
     if (action === "stop") app.tunnels = r;
     app.pf = {};
   } catch (e) {

@@ -14,6 +14,15 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_DIR/kubectl-calls"
 case " $* " in
+  *" get svc -A -l app.kubernetes.io/name=argocd-server "*)
+    if [ -n "${FAKE_HELM:-}" ]; then
+      printf '{"items":[{"metadata":{"namespace":"argo-cd","name":"argo-cd-argocd-server"},"spec":{"ports":[{"name":"http","port":80,"protocol":"TCP"}]}}]}'
+    else printf '{"items":[]}'; fi ;;
+  *" get svc -A -l "*) printf '{"items":[]}' ;;
+  *" get svc argocd-server -n argocd "*)
+    [ -n "${FAKE_HELM:-}${FAKE_NONE:-}" ] && { echo 'Error from server (NotFound): services "argocd-server" not found' >&2; exit 1; }
+    printf '{"spec":{"ports":[{"name":"http","port":80,"protocol":"TCP"},{"name":"https","port":443,"protocol":"TCP"}]}}' ;;
+  *" get configmap argocd-cmd-params-cm "*) printf '%s' "${FAKE_ROOTPATH:-}" ;;
   *" get svc "*)
     case " $* " in
       *" udp-only "*) printf '{"spec":{"ports":[{"name":"dns","port":53,"protocol":"UDP"}]}}' ;;
@@ -51,13 +60,13 @@ teardown() {
 @test "a tunnel uses the scheme Argo CD answers on through it, and a second start reuses it" {
   got=$(pf_start prod)
   # The service's port is named https, but this Argo CD speaks http (server.insecure): ask it.
-  [ "$(jq -r '"\(.url) \(.alt_url) \(.reused) \(.target)"' <<<"$got")" = "http://prod.localhost:28443 http://127.0.0.1:28443 false argocd/svc/argocd-server" ]
+  [ "$(jq -r '"\(.url) \(.alt_url) \(.reused) \(.target)"' <<<"$got")" = "http://prod.localhost:28443/ http://127.0.0.1:28443/ false argocd/svc/argocd-server" ]
   port_open 28443
   grep -q -- "--context ctx-prod -n argocd port-forward svc/argocd-server 28443:443 --address localhost" "$FAKE_DIR/kubectl-calls"
   [ "$(pf_start prod | jq -r .reused)" = true ]
   [ "$(grep -c port-forward "$FAKE_DIR/kubectl-calls")" = 1 ]
   run cmd_pf
-  [[ "$output" == *"running"*"prod"*"http://prod.localhost:28443"* ]]
+  [[ "$output" == *"running"*"prod"*"http://prod.localhost:28443/"* ]]
 }
 
 @test "stop closes the tunnel" {
@@ -91,7 +100,7 @@ unblock() { kill "$blocker"; wait "$blocker" 2>/dev/null || true; }
   [ "$(pf_host "Prod_EU 1")" = prod-eu-1.localhost ]
   [ "$(pf_host ___)" = localhost ]
   a=$(pf_start staging) b=$(pf_start prod)
-  [ "$(jq -r .url <<<"$a") $(jq -r .url <<<"$b")" = "http://staging.localhost:8080 http://prod.localhost:28443" ]
+  [ "$(jq -r .url <<<"$a") $(jq -r .url <<<"$b")" = "http://staging.localhost:8080/ http://prod.localhost:28443/" ]
   port_open 8080 && port_open 28443
 }
 
@@ -111,7 +120,7 @@ unblock() { kill "$blocker"; wait "$blocker" 2>/dev/null || true; }
   pf_start prod >/dev/null
   got=$(pf_status)
   [ "$(jq -c '[.[] | [.name, .alive, .port, .fixed, .login]]' <<<"$got")" = '[["staging",false,8080,false,true],["prod",true,28443,true,false]]' ]
-  [ "$(jq -r '.[1].url' <<<"$got")" = "http://prod.localhost:28443" ]
+  [ "$(jq -r '.[1].url' <<<"$got")" = "http://prod.localhost:28443/" ]
 }
 
 @test "clear errors: unknown cluster, a service with nothing to forward" {
@@ -180,7 +189,7 @@ login_setup() {
       printf '\r\n%s' "$1"; } | serve_handle
   }
   [[ "$(post '{"cluster":"prod"}' | head -1)" == *403* ]]
-  [ "$(post '{"cluster":"prod"}' t0ken | sed '1,/^\r$/d' | jq -r .url)" = "http://prod.localhost:28443" ]
+  [ "$(post '{"cluster":"prod"}' t0ken | sed '1,/^\r$/d' | jq -r .url)" = "http://prod.localhost:28443/" ]
   [[ "$(post '{"cluster":"prod; rm -rf /"}' t0ken | sed '1,/^\r$/d' | jq -r .error)" == *"No cluster named prodrm-rf"* ]]
 }
 
@@ -235,4 +244,24 @@ login_setup() {
   [ "$(jq -r 'select(.title | startswith("Can you")) | "\(.ok) \(.output)"' <<<"$got")" = "false no" ]
   run cmd_pf check prod
   [[ "$output" == *"── Tunnel process"* ]]
+}
+
+@test "a Helm install is found by its labels when the configured service isn't there" {
+  export FAKE_HELM=1
+  config 'clusters: [{name: staging, context: ctx-staging, aws_profile: stg}]'
+  got=$(pf_start staging)
+  [ "$(jq -r '"\(.target) \(.url)"' <<<"$got")" = "argo-cd/svc/argo-cd-argocd-server http://staging.localhost:8080/" ]
+  [[ "$(jq -r .note <<<"$got")" == *"set argocd_namespace: argo-cd and argocd_service: argo-cd-argocd-server"* ]]
+  grep -q -- "-n argo-cd port-forward svc/argo-cd-argocd-server 8080:80" "$FAKE_DIR/kubectl-calls"
+}
+
+@test "Argo CD served under a path gets that path in its link" {
+  export FAKE_ROOTPATH=/argocd
+  [ "$(pf_start prod | jq -r '"\(.url) \(.alt_url)"')" = "http://prod.localhost:28443/argocd/ http://127.0.0.1:28443/argocd/" ]
+}
+
+@test "no Argo CD on a cluster says so, and what to do if one Argo CD manages everything" {
+  export FAKE_NONE=1
+  config 'clusters: [{name: staging, context: ctx-staging, aws_profile: stg}]'
+  [[ "$(pf_start staging | jq -r .error)" == *"No Argo CD on staging"*"If one Argo CD manages every environment, open it from the cluster it runs on"* ]]
 }
