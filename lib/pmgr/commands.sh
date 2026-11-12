@@ -95,7 +95,7 @@ sweep() {
 # emit FORMAT OUT ALL : render the report and return the exit code.
 emit() {
   local format=$1 outfile=$2 all=$3 report text
-  report=$(report_finalize "$(report_build)")
+  report=$(report_finalize "$(code_locate "$(report_build)")")
   case $format in
     text) report_text "$report" "$all" ;;
     json | md | html)
@@ -385,7 +385,7 @@ main() {
     ui) cmd_ui "$@" ;;
     __render) # internal: one full sweep rendered as the live dashboard (used by the ui server)
       sweep access security posture workloads apps traffic lifecycle utilization oncall argo pipelines workflows
-      report=$(report_finalize "$(report_build)")
+      report=$(report_finalize "$(code_locate "$(report_build)")")
       report_html "$report" live >"${1:?}"
       [ -z "${2:-}" ] || printf '%s\n' "$report" >"$2"
       ;;

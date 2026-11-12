@@ -106,7 +106,9 @@ github:
   max_runs_per_repo: 300
   # kind: terraform | gitops | app | other. It decides which repo-level gap checks run.
   # Use owner/repo for a repo outside `org`.
+  # path: your local clone, so findings link to the line that defines the resource ("Defined in
+  # platform-infra/rds.tf:42"). Without it, pmgr looks in ~/src, ~/code, ~/git, ~/repos, ~/Projects and ~.
   repos:
-    - {name: platform-infra, kind: terraform}
+    - {name: platform-infra, kind: terraform}   # e.g. path: ~/src/platform-infra
     - {name: platform-apps, kind: gitops}
     - {name: dns, kind: terraform}

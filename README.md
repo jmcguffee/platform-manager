@@ -238,6 +238,17 @@ nowhere else, and report values are inserted as text, never as HTML.
 `pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
 with no network access at all.
 
+## Where to fix it
+
+Findings link to the line that defines the resource in your own repos: "Defined in
+platform-infra/modules/db/main.tf:2" in the dashboard (a GitHub link) and a `code:` line in the
+terminal. pmgr searches local clones of the repos in `github.repos`: Terraform repos for the
+resource's quoted name (`identifier = "orders-prd"`), GitOps repos for `name: api` in YAML. A
+missing target group links to both the binding and the target group Terraform made. Set `path` on a
+repo, or keep clones in `~/src`, `~/code`, `~/git`, `~/repos` or `~/Projects` and pmgr finds them.
+It's a text search, so a name built by interpolation (`"${var.env}-orders"`) won't match; no link
+means it wasn't found, not that it isn't in code.
+
 ## What changed
 
 Every run is kept (the last 90, readable only by you, in `~/.cache/platform-manager/history`) and

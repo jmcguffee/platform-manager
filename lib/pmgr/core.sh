@@ -86,7 +86,7 @@ config_load() {
           (if (.name // "") == "" or (.context // "") == "" or (.aws_profile // "") == ""
            then "clusters[\($i)]: name, context and aws_profile are required" else empty end)),
       (.github.repos // [] | to_entries[] | .key as $i | .value
-        | keys_ok(["name","kind"]; "github.repos[\($i)]"),
+        | keys_ok(["name","kind","path"]; "github.repos[\($i)]"),
           (if ((.kind // "other") | IN("terraform","gitops","app","other")) | not
            then "github.repos[\($i)]: kind must be terraform, gitops, app or other" else empty end)),
       (if ([.clusters // [] | .[].name] | length) != ([.clusters // [] | .[].name] | unique | length)

@@ -89,6 +89,7 @@ report_text() {
         | c("1"; $titles[.[0].area] // .[0].area),
           (.[] | "  \(c($colors[.severity]; $labels[.severity])) \(if (.id as $i | $new_ids | index($i)) != null then c("1"; "NEW ") else "" end)\(.resource): \(.message)",
                  (if .fix != "" then "       fix: \(.fix)" else empty end),
+                 (.where[]? | "       code: \(.repo)/\(.path):\(.line)"),
                  (if .link != "" then "       \(c("4"; .link))" else empty end))),
       (if (.usage_minutes | length) > 0 then
          c("1"; "\nWhere CI time goes (approximate minutes)"),

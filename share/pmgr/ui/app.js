@@ -348,6 +348,8 @@ function findingRow(f) {
         `${f.savings_note === "up to" ? "up to " : ""}${usd(f.savings_usd_month)}/mo`) : null),
     h("p", { class: "what" }, richText(f.message, false)),
     f.fix ? h("p", { class: "fix" }, richText(f.fix)) : null,
+    f.where && f.where.length ? h("p", { class: "where-code" }, "Defined in ",
+      f.where.map((w, i) => [i ? ", " : "", h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer" }, `${w.repo}/${w.path}:${w.line}`)])) : null,
     (f.link || f.diag) ? h("p", { class: "ref" },
       diagButton(f, slot),
       f.link ? h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, `${linkLabel(f)} ↗`) : null) : null,
