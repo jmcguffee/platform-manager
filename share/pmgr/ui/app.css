@@ -323,3 +323,4 @@ ul.changes { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 ul.changes li .where { margin-left: 6px; font-size: 12.5px; }
 .where-code { font-size: 12.5px; color: var(--steel); margin: 4px 0 0; }
 .where-code a { font-family: var(--mono, ui-monospace, monospace); }
+pre.weekly { white-space: pre-wrap; font: 13px/1.55 var(--mono, ui-monospace, monospace); background: var(--surface); border: 1px solid var(--rule-2); border-radius: 8px; padding: 16px; max-width: 90ch; }

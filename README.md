@@ -258,6 +258,12 @@ The dashboard's Overview has a "Since the last run" panel and tags new findings.
 disappeared because its account or cluster couldn't be read this time is listed as "not checked",
 never as fixed; a narrower run (say `pmgr lb`) is only compared on what it covered.
 
+`pmgr weekly` (or the dashboard's Weekly report page, with a Copy button) turns that history into a
+Markdown status update for the client: what got fixed (by area, leaving out anything that came
+back), what's new and still open, what still needs attention, savings identified and already made,
+EKS versions and CI success. `pmgr weekly --days 14 --out update.md` writes it to a file. It's only
+as complete as your history, so run `pmgr doctor` (or leave `pmgr ui` syncing) during the week.
+
 ## App configuration
 
 `pmgr apps` (and the App config view) reads each Deployment, StatefulSet and DaemonSet outside system

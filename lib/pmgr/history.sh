@@ -78,3 +78,53 @@ changes_text() {
         (if ($c.unchecked | length) > 0 then "", "Not checked this time (still there, as far as pmgr knows)", ($c.unchecked[] | line) else empty end)
     end' <<<"$1"
 }
+
+# weekly_report [DAYS] : a Markdown summary of the last DAYS (7) for a status update: what got fixed,
+# what's new and still open, what still needs attention, savings found and saved, and status.
+weekly_report() {
+  local days=${1:-7} latest dir
+  dir=$(history_dir)
+  latest="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/last-report.json"
+  [ -f "$latest" ] || die "No report yet. Run pmgr doctor or pmgr ui first."
+  # shellcheck disable=SC2086  # the glob is meant to expand
+  cat "$dir"/*.json 2>/dev/null | jq -rs --slurpfile latest "$latest" --argjson days "$days" \
+    --argjson now "$(jq -n --arg n "${PMGR_NOW:-}" 'if $n == "" then now else ($n | tonumber) end | floor')" '
+    def ymd: fromdateiso8601? // . | if type == "number" then strftime("%B %-d, %Y") else . end;
+    def usd: . * 100 | round / 100 | tostring | if test("\\.") then (split(".") | .[0] + "." + (.[1] + "0")[0:2]) else . + ".00" end | "$\(.)";
+    def item: "- **\(.resource)**: \(.message)";
+    def pl($n; $one; $many): "\($n) \(if $n == 1 then $one else $many end)";
+    {auth: "Access", cluster: "Clusters", workload: "Workloads", apps: "Apps", traffic: "Load balancing", lifecycle: "Lifecycle",
+     edge: "Edge", data: "Data stores", identity: "Identity", compute: "Compute", utilization: "Utilization", oncall: "On-call",
+     security: "Security", argo: "Argo CD", pipeline: "Pipelines", workflow: "Workflow gaps"} as $titles
+    | ($now - $days * 86400) as $from
+    | [.[] | select((.generated_at // "1970-01-01T00:00:00Z" | fromdateiso8601) >= $from)] as $window
+    | $latest[0] as $last
+    | ([$last.findings[].id]) as $open_ids
+    | ([$window[].changes.fixed[]?] | unique_by(.id) | map(select(.id as $i | $open_ids | index($i) | not))) as $fixed
+    | ([$window[].changes.new[]?] | unique_by(.id)) as $new_all
+    | ($new_all | map(select(.id as $i | $open_ids | index($i)))) as $new_open
+    | ([$last.findings[] | select(.severity == "critical" or .severity == "error")]) as $urgent
+    | ([$last.findings[] | select(.severity == "warning")] | length) as $warnings
+    | ([$last.findings[] | .savings_usd_month // 0] | add // 0) as $saving_found
+    | ([$window[].findings[]? | select(.savings_usd_month > 0)] | unique_by(.id) | map(select(.id as $i | $fixed | map(.id) | index($i))) | map(.savings_usd_month) | add // 0) as $saved
+    | ([$last.metrics[]? | select(.kind == "workflow" and .success_rate != null)]) as $wfs
+    | "# Platform update: \($from | strftime("%B %-d")) to \($now | strftime("%B %-d, %Y"))", "",
+      "**\($fixed | length) fixed**, \($new_all | length) new (\($new_open | length) still open), \(pl($urgent | length; "error"; "errors")) open, \(pl($warnings; "warning"; "warnings")).\(if $saving_found > 0 then " \($saving_found | usd)/month in savings identified\(if $saved > 0 then ", \($saved | usd)/month already saved" else "" end)." else "" end)",
+      (if ($window | length) == 0 then "", "_No runs in this period: run `pmgr doctor` (or leave `pmgr ui` syncing) during the week to build history._" else empty end),
+      (if ($fixed | length) > 0 then "", "## Fixed", "",
+         ($fixed | group_by(.area)[] | "**\($titles[.[0].area] // .[0].area)**", (.[] | item), "") else empty end),
+      (if ($urgent | length) > 0 then "", "## Needs attention", "", ($urgent | .[0:15][] | item),
+         (if ($urgent | length) > 15 then "- and \($urgent | length - 15) more" else empty end) else empty end),
+      (if ($new_open | length) > 0 then "", "## New this period, still open", "", ($new_open | .[0:10][] | item) else empty end),
+      ([$last.findings[] | select(.savings_usd_month > 0)] | sort_by(-.savings_usd_month) | .[0:8]) as $top
+      | (if ($top | length) > 0 then "", "## Savings", "", "| Where | What | $/month |", "|---|---|---:|",
+          ($top[] | "| \(.resource) | \(.message[0:90] | gsub("\\|"; "/")) | \(.savings_usd_month | usd) |") else empty end),
+      ([$last.metrics[]? | select(.kind == "eks_version")]) as $eks
+      | (if ($eks | length) > 0 or ($wfs | length) > 0 then "", "## Status", "" else empty end),
+      (if ($eks | length) > 0 then "| Cluster | Kubernetes | Support |", "|---|---|---|",
+          ($eks[] | "| \(.cluster) | \(.version) | \(.status // "unknown" | ascii_downcase | gsub("_"; " "))\(if .standard_end then ", standard support ends \(.standard_end | . + "T00:00:00Z" | ymd)" else "" end) |"), "" else empty end),
+      (if ($wfs | length) > 0 then
+         ([$wfs[] | .runs] | add) as $runs | ([$wfs[] | .success_rate * .runs] | add) as $ok
+         | "CI: \($ok / $runs * 100 | round)% of \($runs) workflow runs succeeded." else empty end),
+      "", "_From pmgr (\(pl($window | length; "run"; "runs")) in this period)._"'
+}

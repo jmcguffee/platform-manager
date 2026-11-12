@@ -27,6 +27,7 @@ Health
   security                Internet exposure by environment: security groups, load balancers, public services
   diagnose NAME           Logs, events and describe output for a finding (matches its resource or message)
   changes                 What's new, fixed, or not checked since the run before the last one
+  weekly [--days N]       A Markdown status update: fixed, new, still open, savings (from run history)
 
 Argo CD
   pf argo CLUSTER|--all   Port-forward to Argo CD on a stable local port and open it
@@ -357,6 +358,16 @@ main() {
     oncall) cmd_report "oncall" --all "$@" ;;
     security) cmd_report "security" --all "$@" ;;
     diagnose) cmd_diagnose "$@" ;;
+    weekly)
+      local wdays=7 wout=""
+      while [ $# -gt 0 ]; do
+        case $1 in --days) wdays=${2:?--days needs a number}; shift ;; --out) wout=${2:?--out needs a file}; shift ;; *) die "Usage: pmgr weekly [--days N] [--out FILE]" ;; esac
+        shift
+      done
+      case $wdays in '' | *[!0-9]*) die "--days needs a whole number" ;; esac
+      if [ -n "$wout" ]; then weekly_report "$wdays" >"$wout" && printf 'Wrote %s\n' "$wout" >&2; else weekly_report "$wdays"; fi
+      ;;
+    __weekly) weekly_report "${1:-7}" ;;
     changes)
       f="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/last-report.json"
       [ -f "$f" ] || die "No report yet. Run pmgr doctor or pmgr ui first."

@@ -62,3 +62,35 @@ F() { jq -cn --arg id "$1" --arg area "$2" --arg r "$3" '{id: $id, severity: "er
   [[ "$text" == *"Since the last run: 1 new, 1 fixed"* ]]
   [[ "$text" == *"NEW acct/us-east-2/ebs/v"* ]]
 }
+
+@test "the weekly report: fixed (not reopened), new and still open, what needs attention, savings, status" {
+  export PMGR_NOW=$(jq -n '"2026-11-12T12:00:00Z" | fromdateiso8601')
+  S() { jq -cn --arg id "$1" --arg sev "$2" --arg area "$3" --arg r "$4" --argjson save "${5:-0}" \
+    '{id: $id, severity: $sev, area: $area, resource: $r, message: "m \($id)"} + (if $save > 0 then {savings_usd_month: $save} else {} end)'; }
+  report_finalize "$(rep "posture" "[$(S a error identity acct/role/ci), $(S v warning compute acct/us-east-2/ebs/vol-1 10), $(S z error data acct/s3/b)]")" >/dev/null
+  sleep 1
+  report_finalize "$(rep "posture" "[$(S z error data acct/s3/b), $(S n error edge acct/us-east-2/lb/x), $(S g info compute acct/us-east-2/ebs/gp2 6.5)]" |
+    jq -c '. + {metrics: [{kind: "eks_version", cluster: "prd", version: "1.32", status: "EXTENDED_SUPPORT", standard_end: "2026-03-23"},
+                          {kind: "workflow", runs: 40, success_rate: 0.95}]}')" >/dev/null
+  out=$(weekly_report 7)
+  [[ "$out" == "# Platform update: November 5 to November 12, 2026"* ]]
+  [[ "$out" == *"**2 fixed**, 2 new (2 still open), 2 errors open, 0 warnings. \$6.50/month in savings identified, \$10.00/month already saved."* ]]
+  [[ "$out" == *"## Fixed"*"**Identity**"*"- **acct/role/ci**: m a"*"**Compute**"*"acct/us-east-2/ebs/vol-1"* ]]
+  [[ "$out" == *"## Needs attention"*"acct/s3/b"*"acct/us-east-2/lb/x"* ]]
+  [[ "$out" == *"| prd | 1.32 | extended support, standard support ends March 23, 2026 |"* ]]
+  [[ "$out" == *"CI: 95% of 40 workflow runs succeeded."* ]]
+  run "$PMGR_ROOT/bin/pmgr" weekly --days x
+  [[ "$output" == *"--days needs a whole number"* ]]
+}
+
+@test "the dashboard's weekly route needs the token header and returns Markdown" {
+  report_finalize "$(rep "posture" "[]")" >/dev/null
+  SERVE_DIR="$BATS_TEST_TMPDIR/live"; mkdir -p "$SERVE_DIR"
+  SERVE_HOST="127.0.0.1:8765"; SERVE_TOKEN="t0ken"
+  export SERVE_DIR SERVE_HOST SERVE_TOKEN
+  post() { printf 'POST /api/weekly HTTP/1.1\r\nHost: 127.0.0.1:8765\r\n%sContent-Length: 11\r\n\r\n{"days":14}' "$1" | serve_handle; }
+  [[ "$(post "" | head -1)" == *403* ]]
+  got=$(post $'X-Pmgr-Token: t0ken\r\n')
+  [[ "$got" == *"Content-Type: text/markdown"* ]]
+  [[ "$got" == *"# Platform update: "* ]]
+}

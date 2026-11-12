@@ -137,6 +137,15 @@ serve_handle() {
         [ -s "$SERVE_DIR/pf.json" ] || printf '{"error": "pmgr didn'"'"'t answer."}' >"$SERVE_DIR/pf.json"
         serve_respond "200 OK" "application/json" "$SERVE_DIR/pf.json"
       fi ;;
+    "POST /api/weekly")
+      if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
+        serve_text "403 Forbidden" "The weekly report needs the token header."
+      else
+        local days
+        days=$(jq -r '.days // 7' <<<"$body" 2>/dev/null | tr -cd '0-9')
+        "$PMGR_ROOT/bin/pmgr" __weekly "${days:-7}" >"$SERVE_DIR/weekly.md" 2>&1 </dev/null || true
+        serve_respond "200 OK" "text/markdown; charset=utf-8" "$SERVE_DIR/weekly.md"
+      fi ;;
     "POST /api/sync")
       if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
         serve_text "403 Forbidden" "Syncing needs the token header."

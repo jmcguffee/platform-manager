@@ -5,7 +5,7 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "apps", "traffic", "lifecycle", "edge", "data", "identity", "compute", "utilization", "pipelines", "workflows", "argo", "sources"];
+const VIEWS = ["overview", "actions", "weekly", "oncall", "access", "security", "workloads", "apps", "traffic", "lifecycle", "edge", "data", "identity", "compute", "utilization", "pipelines", "workflows", "argo", "sources"];
 const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], apps: ["apps"], traffic: ["traffic"], lifecycle: ["lifecycle"], edge: ["edge"], data: ["data"], identity: ["identity"], compute: ["compute"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
@@ -49,7 +49,7 @@ async function api(path, method = "GET", body = null) {
       continue;
     }
     if (!r.ok) throw new Error((await r.text()).trim() || `HTTP ${r.status}`);
-    return r.json();
+    return (r.headers.get("Content-Type") || "").startsWith("text/") ? r.text() : r.json();
   }
 }
 
@@ -931,6 +931,40 @@ function lifecycle() {
   });
 }
 
+// ---------- weekly report ----------
+// A Markdown status update from pmgr's run history, ready to paste into an email, Slack or Confluence.
+app.weekly = { days: 7 };
+async function loadWeekly() {
+  app.weekly.loading = true; app.weekly.error = ""; drawWeekly();
+  try { app.weekly.text = await api("/api/weekly", "POST", { days: app.weekly.days }); }
+  catch (e) { app.weekly.error = e.message; }
+  app.weekly.loading = false; drawWeekly();
+}
+function drawWeekly() {
+  const el = document.getElementById("weekly");
+  if (!el) return;
+  const w = app.weekly;
+  el.replaceChildren(
+    w.loading ? h("p", { class: "muted" }, h("span", { class: "spin", "aria-hidden": "true" }), "Building the report from your run history…")
+    : w.error ? h("p", { class: "banner" }, `Couldn't build it: ${w.error}`)
+    : w.text ? h("div", {}, h("p", {}, copyButton(w.text)), h("pre", { class: "weekly" }, w.text)) : null);
+}
+function weekly() {
+  if (!app.live) return [h("h2", { class: "verdict" }, "Weekly report"),
+    h("p", { class: "verdict-sub" }, "It's built from pmgr's run history, so it works in pmgr ui. From the terminal: pmgr weekly (or pmgr weekly --days 14 --out update.md).")];
+  const pick = h("span", { class: "pf" }, [7, 14, 30].map((d) => {
+    const b = h("button", { type: "button", class: d === app.weekly.days ? "primary btn-sm" : "ghost diag-btn" }, `${d} days`);
+    b.addEventListener("click", () => { app.weekly.days = d; app.weekly.text = ""; render(); });
+    return b;
+  }));
+  setTimeout(() => { if (!app.weekly.text && !app.weekly.loading) loadWeekly(); else drawWeekly(); }, 0);
+  return [
+    h("h2", { class: "verdict" }, "Weekly report"),
+    h("p", { class: "verdict-sub" }, "What got fixed, what's new and still open, what needs attention, and the savings, from every run pmgr kept. Markdown, ready to paste into an email, Slack or Confluence."),
+    pick, h("div", { id: "weekly" }),
+  ];
+}
+
 function apps() {
   return areaView("apps", {
     bad: "Some apps are set up unsafely.", warn: "Some apps aren't set up to survive a node going away.", good: "Apps are set up well.",
@@ -1210,11 +1244,11 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, oncall, access, security, workloads, apps, traffic, lifecycle, edge, data, identity, compute, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, weekly, oncall, access, security, workloads, apps, traffic, lifecycle, edge, data, identity, compute, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 const NAV = [
-  ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
+  ["Today", [["overview", "Overview"], ["actions", "Action items"], ["weekly", "Weekly report"], ["oncall", "On-call"]]],
   ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["apps", "App config"], ["traffic", "Load balancing"], ["lifecycle", "Lifecycle"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
   ["AWS posture", [["edge", "Edge & WAF"], ["data", "Data stores"], ["identity", "Identity & IAM"], ["compute", "Compute & EBS"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
