@@ -19,6 +19,15 @@ pf_port() {
     | if $e == null then empty else ($e.value.argocd_port // (8080 + $e.key)) end' <<<"$PMGR_CONFIG_JSON"
 }
 
+# Each environment gets its own host name, like dev.localhost. Browsers keep cookies per host, not
+# per port, so on plain localhost every Argo CD would share one login cookie and signing in to a
+# second environment would sign you out of the first. *.localhost always means this machine.
+pf_host() {
+  local label
+  label=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -E 's/-+/-/g; s/^-//; s/-$//' | cut -c1-63)
+  if [ -n "$label" ]; then printf '%s.localhost' "$label"; else printf 'localhost'; fi
+}
+
 pf_fixed_port() { # NAME : argocd_port if the config sets one
   jq -r --arg n "$1" '[.clusters // [] | .[] | select(.name == $n)] | first | .argocd_port // empty' <<<"$PMGR_CONFIG_JSON"
 }
@@ -32,7 +41,7 @@ pf_planned_port() {
   local fixed last
   fixed=$(pf_fixed_port "$1")
   [ -z "$fixed" ] || { printf '%s' "$fixed"; return; }
-  last=$(tr -cd 0-9 <"$(pf_dir)/$1.port" 2>/dev/null)
+  last=$(tr -cd 0-9 2>/dev/null <"$(pf_dir)/$1.port")
   if [ -n "$last" ]; then printf '%s' "$last"; else pf_port "$1"; fi
 }
 
@@ -81,9 +90,10 @@ pf_start() {
     port=$(pf_free_port) || { printf '{"error": "Couldn'"'"'t find a free local port."}\n'; return 1; }
   fi
   log="$dir/$name.log"
-  # nohup + setsid-like detach: the tunnel outlives this command (stop it with pmgr pf stop).
+  # nohup: the tunnel outlives this command (stop it with pmgr pf stop). --address localhost binds
+  # 127.0.0.1 and ::1 only, since browsers may try either for dev.localhost.
   AWS_PROFILE="$profile" nohup kubectl --context "$ctx" -n "$ns" port-forward "svc/$svc" "$port:$remote" \
-    --address 127.0.0.1 >"$log" 2>&1 </dev/null 3>&- &
+    --address localhost >"$log" 2>&1 </dev/null 3>&- &
   pid=$!
   i=0
   while ! port_open "$port" && [ "$i" -lt 40 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.25; i=$((i + 1)); done
@@ -92,7 +102,7 @@ pf_start() {
     jq -cn --arg e "$(tail -n 3 "$log" | tr '\n' ' ')" --arg name "$name" '{error: "The port-forward for \($name) didn'"'"'t start: \($e)"}'
     return 1
   fi
-  jq -cn --arg name "$name" --arg url "$scheme://localhost:$port" --argjson pid "$pid" --arg ctx "$ctx" --arg svc "$svc" \
+  jq -cn --arg name "$name" --arg url "$scheme://$(pf_host "$name"):$port" --argjson pid "$pid" --arg ctx "$ctx" --arg svc "$svc" \
     --arg ns "$ns" --argjson port "$port" \
     '{name: $name, url: $url, pid: $pid, port: $port, context: $ctx, target: "\($ns)/svc/\($svc)", started_at: (now | todateiso8601), reused: false}' \
     | tee "$dir/$name.json"
@@ -110,7 +120,8 @@ pf_status() {
     if pf_alive "$name"; then alive=true; state=$(cat "$(pf_dir)/$name.json"); fi
     out=$(jq -c --arg n "$name" --argjson s "$state" --argjson alive "$alive" --arg planned "$(pf_planned_port "$name")" \
       --argjson c "$(diag_cluster "$name")" \
-      '. + [{name: $n, alive: $alive, url: ($s.url // null), port: ($s.port // ($planned | tonumber)),
+      --arg host "$(pf_host "$name")" \
+      '. + [{name: $n, alive: $alive, url: ($s.url // null), host: $host, port: ($s.port // ($planned | tonumber)),
              fixed: ($c.argocd_port != null), login: (($c.argocd_secret // "") != ""),
              username: ($c.argocd_username // null)}]' <<<"$out")
   done < <(cfg '.clusters // [] | .[].name')
@@ -238,7 +249,7 @@ cmd_pf() {
       [ $# -gt 0 ] || die "Usage: pmgr pf login CLUSTER"
       pf_login_say "$1"
       ;;
-    status) pf_status | jq -r '.[] | "\(if .alive then "running" else "stopped" end)\t\(.name)\tlocalhost:\(.port)\(if .fixed then " (fixed)" else "" end)\t\(if .login then "login configured" else "no login secret" end)"' | column -t -s $'\t' ;;
+    status) pf_status | jq -r '.[] | "\(if .alive then "running" else "stopped" end)\t\(.name)\t\(.host):\(.port)\(if .fixed then " (fixed)" else "" end)\t\(if .login then "login configured" else "no login secret" end)"' | column -t -s $'\t' ;;
     stop)
       if [ "${1:-all}" = all ]; then
         for f in "$(pf_dir)"/*.json; do [ -f "$f" ] && pf_stop "$(basename "$f" .json)"; done

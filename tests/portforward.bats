@@ -35,18 +35,20 @@ teardown() {
 @test "each cluster gets a stable port: argocd_port, or 8080 plus its position" {
   [ "$(pf_port staging)" = 8080 ]
   [ "$(pf_port prod)" = 28443 ]
+  run pf_planned_port staging   # no saved port yet: quietly the default
+  [ "$output" = 8080 ]
   [ -z "$(pf_port nope)" ]
 }
 
 @test "starting a port-forward uses https when the service has it, and a second start reuses it" {
   got=$(pf_start prod)
-  [ "$(jq -r '"\(.url) \(.reused) \(.target)"' <<<"$got")" = "https://localhost:28443 false argocd/svc/argocd-server" ]
+  [ "$(jq -r '"\(.url) \(.reused) \(.target)"' <<<"$got")" = "https://prod.localhost:28443 false argocd/svc/argocd-server" ]
   port_open 28443
-  grep -q -- "--context ctx-prod -n argocd port-forward svc/argocd-server 28443:443 --address 127.0.0.1" "$FAKE_DIR/kubectl-calls"
+  grep -q -- "--context ctx-prod -n argocd port-forward svc/argocd-server 28443:443 --address localhost" "$FAKE_DIR/kubectl-calls"
   [ "$(pf_start prod | jq -r .reused)" = true ]
   [ "$(grep -c port-forward "$FAKE_DIR/kubectl-calls")" = 1 ]
   run cmd_pf
-  [[ "$output" == *"running"*"prod"*"https://localhost:28443"* ]]
+  [[ "$output" == *"running"*"prod"*"https://prod.localhost:28443"* ]]
 }
 
 @test "stop closes the tunnel" {
@@ -75,6 +77,15 @@ unblock() { kill "$blocker"; wait "$blocker" 2>/dev/null || true; }
   unblock
 }
 
+@test "each environment gets its own host, so their Argo CD logins don't share a cookie" {
+  [ "$(pf_host staging)" = staging.localhost ]
+  [ "$(pf_host "Prod_EU 1")" = prod-eu-1.localhost ]
+  [ "$(pf_host ___)" = localhost ]
+  a=$(pf_start staging) b=$(pf_start prod)
+  [ "$(jq -r .url <<<"$a") $(jq -r .url <<<"$b")" = "https://staging.localhost:8080 https://prod.localhost:28443" ]
+  port_open 8080 && port_open 28443
+}
+
 @test "after a stop, the next start reuses the same port" {
   block_port 8080
   port=$(pf_start staging | jq -r .port)
@@ -91,7 +102,7 @@ unblock() { kill "$blocker"; wait "$blocker" 2>/dev/null || true; }
   pf_start prod >/dev/null
   got=$(pf_status)
   [ "$(jq -c '[.[] | [.name, .alive, .port, .fixed, .login]]' <<<"$got")" = '[["staging",false,8080,false,true],["prod",true,28443,true,false]]' ]
-  [ "$(jq -r '.[1].url' <<<"$got")" = "https://localhost:28443" ]
+  [ "$(jq -r '.[1].url' <<<"$got")" = "https://prod.localhost:28443" ]
 }
 
 @test "clear errors: unknown cluster, a service with nothing to forward" {
@@ -151,7 +162,7 @@ login_setup() {
       printf '\r\n%s' "$1"; } | serve_handle
   }
   [[ "$(post '{"cluster":"prod"}' | head -1)" == *403* ]]
-  [ "$(post '{"cluster":"prod"}' t0ken | sed '1,/^\r$/d' | jq -r .url)" = "https://localhost:28443" ]
+  [ "$(post '{"cluster":"prod"}' t0ken | sed '1,/^\r$/d' | jq -r .url)" = "https://prod.localhost:28443" ]
   [[ "$(post '{"cluster":"prod; rm -rf /"}' t0ken | sed '1,/^\r$/d' | jq -r .error)" == *"No cluster named prodrm-rf"* ]]
 }
 

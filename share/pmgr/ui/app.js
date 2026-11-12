@@ -242,9 +242,9 @@ function tunnelTable() {
       return b;
     };
     const port = !t ? h("span", { class: "muted" }, app.live ? "…" : "–")
-      : t.alive ? h("a", { href: t.url, target: "_blank", rel: "noopener noreferrer" }, `localhost:${t.port}`)
+      : t.alive ? h("a", { href: t.url, target: "_blank", rel: "noopener noreferrer" }, t.url.replace(/^https?:\/\//, ""))
       : h("span", { title: t.fixed ? "argocd_port in your config" : "Last port used, else 8080 + the cluster's position. If it's taken, a free port is picked." },
-          String(t.port), h("span", { class: "muted" }, t.fixed ? " fixed" : " auto"));
+          `${t.host}:${t.port}`, h("span", { class: "muted" }, t.fixed ? " fixed" : " auto"));
     const actions = !app.live ? h("span", { class: "muted" }, "in pmgr ui")
       : !t ? null
       : t.alive ? h("span", { class: "pf" },

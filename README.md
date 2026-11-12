@@ -190,8 +190,14 @@ the finding, each with the exact command:
 
 The Argo CD view has an **Environments** table: one row per cluster with its tunnel status, the local
 port, and **Create tunnel**, **Open Argo CD**, **Copy password** and **Stop** buttons. A tunnel is
-`kubectl port-forward svc/argocd-server` on 127.0.0.1, run with the cluster's AWS profile; it keeps
-running after you close the dashboard, until you stop it (or your SSO session expires).
+`kubectl port-forward svc/argocd-server` on this machine's loopback only, run with the cluster's
+AWS profile; it keeps running after you close the dashboard, until you stop it (or your SSO session
+expires).
+
+Each environment opens on its own name, like `https://dev.localhost:8080` and
+`https://uat.localhost:8081`. Browsers keep cookies per host, not per port, so on plain `localhost`
+every Argo CD would share one login cookie and signing in to one environment would sign you out of
+the others. `*.localhost` always means this machine; nothing to add to `/etc/hosts`.
 
 Ports: `argocd_port` fixes one. Otherwise pmgr reuses the port it used last time, else 8080, 8081, …
 in config order, and if that one is taken, a free port the OS picks.
