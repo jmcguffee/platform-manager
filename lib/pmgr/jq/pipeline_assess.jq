@@ -9,6 +9,7 @@ by_workflow[] | . as $rows | ($rows[0] | wf_label) as $name
           ($why[($b.latest.id | tostring)] // []) as $ex | ($ex[0] // {}) as $first
           | ($first.diagnosis // {}) as $d
           | $base + {check: "pipeline.broken", severity: "error", link: ($b.latest.html_url // ""),
+              diag: {type: "run", repo: $repo, run_id: $b.latest.id},
               message: ("'\($name)' is failing on \($branch): \($b.streak) failed run(s) in a row (last pass: "
                 + (if $b.last_success then $b.last_success.created_at[0:10] else "over \($days) days" end) + ")"
                 + (if ($first.step // "") != "" then ". Fails at '\($first.job) › \($first.step)'" else "" end)
@@ -20,10 +21,12 @@ by_workflow[] | . as $rows | ($rows[0] | wf_label) as $name
         else empty end),
         (if $b == null and ($main | length) >= 6 then
           ([$main[] | select(failed)] | length) as $f | ($f / ($main | length)) as $rate
+          | ([$main[] | select(failed)] | first) as $last_fail
           | if $rate >= 0.15 then $base + {check: "pipeline.unreliable",
+              diag: (if $last_fail then {type: "run", repo: $repo, run_id: $last_fail.id} else null end),
               severity: (if $rate >= 0.30 then "warning" else "info" end),
               message: "'\($name)' failed \($f) of \($main | length) runs on \($branch) in the last \($days) days (\($rate * 100 | round)%)",
-              fix: "Open the failed runs to see whether one step or cause dominates.",
+              fix: "Diagnose shows the latest failure's jobs and logs. If the same step fails each time, fix that step; if it varies, look for flaky tests or timeouts.",
               evidence: {failed: $f, runs: ($main | length), rate: $rate}}
             else empty end
         else empty end),

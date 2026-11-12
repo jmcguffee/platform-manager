@@ -2,7 +2,8 @@ def ts: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
     (if $now == "" then now else ($now | tonumber) end) as $t
     | (.items // [])[] | .metadata as $m | (.spec // {}) as $spec | (.status // {}) as $st
     | ($m.name // "?") as $name
-    | {area: "argo", resource: "\($cluster)/\($m.namespace // "argocd")/\($name)", link: "", evidence: {}} as $base
+    | {area: "argo", resource: "\($cluster)/\($m.namespace // "argocd")/\($name)", link: "", evidence: {},
+       diag: {type: "argo", cluster: $cluster, ns: ($m.namespace // "argocd"), name: $name}} as $base
     | ($st.sync.status // "") as $sync | ($st.health.status // "") as $health
     | ($st.operationState // {}) as $op
     # `automated: {}` means auto-sync with defaults, so presence counts, not truthiness.
@@ -11,12 +12,12 @@ def ts: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
     | ( ($st.conditions // [])[] | select(.type | IN("ComparisonError", "InvalidSpecError", "SyncError", "UnknownError"))
           | $base + {check: "argo.condition", severity: "error",
               message: "\($name): \(.type): \((.message // "")[0:400])",
-              fix: "A ComparisonError usually means the manifests don't render. Run `kustomize build` on this app's overlay at the target revision.",
+              fix: "The manifests don't render at this revision: fix the overlay error quoted above (Diagnose shows Argo's full status and events).",
               evidence: {condition: .}} ),
       ( if ($op.phase // "") | IN("Failed", "Error") then
           $base + {check: "argo.sync_failed", severity: "error",
             message: "\($name): last sync \($op.phase | ascii_downcase): \(($op.message // "")[0:400])",
-            fix: "The failing resource is named in the message. Check it with `kubectl describe`."}
+            fix: "Fix the resource the message names; Diagnose lists every resource that didn't sync and why."}
         elif ($op.phase // "") == "Running" and $op.startedAt != null and (($t - ($op.startedAt | ts)) / 60) >= 15 then
           $base + {check: "argo.stuck", severity: "warning",
             message: "\($name): sync has been running for \((($t - ($op.startedAt | ts)) / 60) | floor) min",

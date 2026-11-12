@@ -45,7 +45,8 @@ def web_only: .FromPort as $f | (.IpProtocol // "") == "tcp" and $f == .ToPort a
        else "private_env" end) as $verdict
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: $e, type: "Security group",
          id: $g.GroupId, name: $g.GroupName, detail: "\($c | join(", ")) on \($p | ports)", allowed: ($verdict == "allowed")} ),
-      ( base("sg/\($g.GroupId)") + {evidence: {group: $g.GroupId, rule: ($p | ports), vpc: $g.VpcId}} +
+      ( base("sg/\($g.GroupId)") + {evidence: {group: $g.GroupId, rule: ($p | ports), vpc: $g.VpcId},
+          diag: {type: "sg", profile: $in.label, region: $in.region, id: $g.GroupId}} +
         ( if $verdict == "private_env" then {check: "security.public_ingress", severity: "error",
             message: "\($g.GroupName) (\($g.GroupId)) allows \($c | join(", ")) on \($p | ports) in \($e), which should be private",
             fix: "Remove the rule, or narrow it to your VPN or VPC CIDRs. Only the \($cfg.public_envs | join("/")) load balancer should accept the internet."}
@@ -65,7 +66,8 @@ def web_only: .FromPort as $f | (.IpProtocol // "") == "tcp" and $f == .ToPort a
     | (is_public_env(.env) or allowed([.LoadBalancerName, .LoadBalancerArn])) as $ok
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: .env, type: "Load balancer (\(.Type // "lb"))",
          id: .LoadBalancerName, name: .DNSName, detail: "internet-facing", allowed: $ok} ),
-      ( select($ok | not) | base("lb/\(.LoadBalancerName)") + {check: "security.public_lb", severity: (if .env == null then "warning" else "error" end),
+      ( select($ok | not) | base("lb/\(.LoadBalancerName)") + {diag: {type: "lb", profile: $in.label, region: $in.region, id: .LoadBalancerName},
+          check: "security.public_lb", severity: (if .env == null then "warning" else "error" end),
           message: "Load balancer \(.LoadBalancerName) is internet-facing in \(where(.env))",
           fix: (if .env == null then "Tag it (or its VPC) with \($cfg.tag). If it isn't production, recreate it as internal."
                 else "Only \($cfg.public_envs | join("/")) should have an internet-facing load balancer. Recreate it with scheme internal, and reach it over VPN." end)} ) ),

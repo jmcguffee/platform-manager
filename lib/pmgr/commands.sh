@@ -20,6 +20,7 @@ Health
   utilization             Over- and under-used RDS, Redshift, ElastiCache, MSK and EKS capacity
   oncall                  Datadog: open pages, active incidents, alerting monitors (needs Pup)
   security                Internet exposure by environment: security groups, load balancers, public services
+  diagnose NAME           Logs, events and describe output for a finding (matches its resource or message)
   pipelines [--repo R]    Pipeline failures, flakiness, slowness, and workflow gaps
   doctor                  Everything above
   ui [--file]             Open the dashboard, with a Sync now button (--file: a static page)
@@ -75,6 +76,7 @@ sweep() {
 emit() {
   local format=$1 outfile=$2 all=$3 report text
   report=$(report_build)
+  save_last_report "$report"
   case $format in
     text) report_text "$report" "$all" ;;
     json | md | html)
@@ -93,6 +95,13 @@ emit() {
     *) die "Unknown format '$format'. Use text, json, md or html." ;;
   esac
   report_exit "$report"
+}
+
+# Keep the latest report so `pmgr diagnose` can find its findings.
+save_last_report() {
+  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager"
+  mkdir -p "$dir" && chmod 700 "$dir"
+  (umask 077 && printf '%s\n' "$1" >"$dir/last-report.json.tmp" && mv "$dir/last-report.json.tmp" "$dir/last-report.json")
 }
 
 # Shared option parsing for report commands. Sets FORMAT, OUTFILE, ALL, POSITIONAL, SWEEP_REPOS.
@@ -324,6 +333,11 @@ main() {
     utilization) cmd_report "utilization" --all "$@" ;;
     oncall) cmd_report "oncall" --all "$@" ;;
     security) cmd_report "security" --all "$@" ;;
+    diagnose) cmd_diagnose "$@" ;;
+    __diagnose) # internal: diagnose one finding of the ui server's report by id; prints a JSON array
+      jq -c --arg id "${1:?}" '[.findings[] | select(.id == $id)] | first | .diag // empty' "$SERVE_DIR/report.json" >"$PMGR_TMP/diag.json"
+      if [ -s "$PMGR_TMP/diag.json" ]; then diagnose_finding "$(cat "$PMGR_TMP/diag.json")" | jq -cs .; else printf '[]\n'; fi
+      ;;
     pipelines) cmd_report "pipelines workflows" "$@" ;;
     doctor) cmd_report "access security workloads utilization oncall argo pipelines workflows" "$@" ;;
     use) cmd_use "$@" ;;
@@ -334,6 +348,7 @@ main() {
     __render) # internal: one full sweep rendered as the live dashboard (used by the ui server)
       sweep access security workloads utilization oncall argo pipelines workflows
       report=$(report_build)
+      save_last_report "$report"
       report_html "$report" live >"${1:?}"
       [ -z "${2:-}" ] || printf '%s\n' "$report" >"$2"
       ;;

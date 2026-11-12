@@ -286,3 +286,17 @@ section.repo .findings { margin-top: 10px; }
   .stats > div { border-right: 0; border-bottom: 1px solid var(--rule); }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- diagnose ---------- */
+.ref { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.diag-btn { padding: 4px 10px; border: 1px solid var(--rule-2); color: var(--accent); background: var(--surface); }
+.diag-btn:hover { border-color: var(--accent); background: var(--accent-wash); }
+.diag-hint { font-size: 12px; }
+.diag { margin-top: 10px; display: grid; gap: 8px; }
+.diag-sec { border: 1px solid var(--rule); border-radius: 6px; background: var(--page); }
+.diag-sec > summary { cursor: pointer; padding: 7px 10px; font-weight: 600; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+.diag-sec.failed { border-color: var(--bad); }
+.diag-cmd { margin: 0 10px 6px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.diag-cmd code { font-size: 11.5px; }
+.diag pre { margin: 0; padding: 10px 12px; max-height: 360px; overflow: auto; background: var(--surface); border-top: 1px solid var(--rule);
+  font: 12px/1.45 var(--code); white-space: pre; color: var(--ink-2); border-radius: 0 0 6px 6px; }

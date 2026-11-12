@@ -94,7 +94,8 @@ auth_findings() {
     | ("pmgr login " + $name) as $login
     | (if $group == "" then "" else " (PIM group: \($group))" end) as $g
     | ($pim != "") as $has_pim
-    | {area: "auth", resource: $name, evidence: {profile: $s.profile}, link: $pim} as $base
+    | {area: "auth", resource: $name, evidence: {profile: $s.profile}, link: $pim,
+       diag: (if $s.state == "no_cli" then null else {type: "auth", profile: $s.profile} end)} as $base
     | if $s.state == "ok" then empty
       elif $s.state == "expiring" then $base + {check: "auth.expiring", severity: "warning",
           message: "AWS session for \($name) ends soon: \($s.detail)",
@@ -116,7 +117,7 @@ auth_findings() {
           message: $s.detail, fix: "Install AWS CLI v2."}
       else $base + {check: "auth.unknown", severity: "error", link: "",
           message: "AWS check for \($name) failed: \($s.detail)",
-          fix: "Run `aws sts get-caller-identity --profile \($s.profile)` to see the full error."}
+          fix: "Diagnose shows the full AWS error and how the profile is set up."}
       end' <<<"$3"
 }
 

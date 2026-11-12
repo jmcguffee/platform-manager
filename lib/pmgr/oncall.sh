@@ -209,7 +209,7 @@ oncall_sweep() {
     <(jq -c 'select(has("kind"))' "$PMGR_TMP/dd/rows.jsonl"))
   if [ -n "$unread" ]; then
     source_row datadog "$DD_SITE_NAME" false "Read ${n:-nothing open}, but couldn't read:$unread ($(cat "$PMGR_TMP"/dd/*.err 2>/dev/null | head -1))" \
-      "Your Datadog role may not include those products. Run the pup command by hand to see the full error."
+      "Your Datadog role probably doesn't include those products (the error is quoted above): ask your Datadog admin for read access to them."
   else
     source_row datadog "$DD_SITE_NAME" true "${n:-No open pages, active incidents or alerting monitors}"
   fi

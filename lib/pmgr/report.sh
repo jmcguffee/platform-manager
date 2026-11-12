@@ -34,7 +34,8 @@ report_build() {
                  kubernetes, expires_at: .auth.expires_at}],
       accounts: [$accounts[0][] | {name, profile: .aws_profile, aws: .auth.state, arn: .auth.arn,
                  account: .auth.account}],
-      findings: $findings,
+      # A stable short id per finding (a djb2 hash of check and resource), for Diagnose.
+      findings: [$findings[] | . + {id: ("f" + ((.check + "|" + .resource) | reduce explode[] as $c (5381; (. * 33 + $c) % 4294967296) | tostring))}],
       usage_minutes: $usage,
       unseen: $unseen,
       metrics: $metrics,

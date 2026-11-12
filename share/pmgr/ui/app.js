@@ -31,16 +31,18 @@ const K8S_STATE = {
   skipped: ["off", "Not checked"],
 };
 
-const app = { report: null, sev: new Set(SEV), q: "", everyone: false, live: false, token: "", syncing: false, syncError: "" };
+const app = { report: null, sev: new Set(SEV), q: "", everyone: false, diag: {}, live: false, token: "", syncing: false, syncError: "" };
 
 // ---------- syncing (only when `pmgr ui` serves the page) ----------
 // The server answers one connection at a time and is briefly closed between them, so a refused
 // connection is retried a few times before it counts as "not running".
-async function api(path, method = "GET") {
+async function api(path, method = "GET", body = null) {
   for (let attempt = 0; ; attempt += 1) {
     let r;
     try {
-      r = await fetch(path, { method, headers: { "X-Pmgr-Token": app.token }, cache: "no-store" });
+      const headers = { "X-Pmgr-Token": app.token };
+      if (body) headers["Content-Type"] = "application/json";
+      r = await fetch(path, { method, headers, cache: "no-store", body: body ? JSON.stringify(body) : undefined });
     } catch (e) {
       if (attempt >= 8) throw new Error("pmgr ui isn't running anymore. Start it again in your terminal.");
       await new Promise((done) => setTimeout(done, 150 * (attempt + 1)));
@@ -162,7 +164,45 @@ function linkLabel(f) {
   return f.link;
 }
 
+// ---------- diagnose ----------
+// Runs the read-only commands you'd run by hand for this finding (describe, events, logs, the failing
+// job's log) on the pmgr ui server, and shows the output under the finding.
+function diagPanel(f) {
+  const state = app.diag[f.id];
+  if (!state) return null;
+  if (state.loading) return h("div", { class: "diag" }, h("p", { class: "muted" }, h("span", { class: "spin", "aria-hidden": "true" }), "Diagnosing: gathering describe output, events and logs…"));
+  if (state.error) return h("div", { class: "diag" }, h("p", { class: "banner" }, `Diagnose didn't finish: ${state.error}`));
+  if (!state.sections.length) return h("div", { class: "diag" }, h("p", { class: "muted" }, "Nothing more to look up for this finding."));
+  return h("div", { class: "diag" }, state.sections.map((x, i) =>
+    h("details", { class: `diag-sec${x.ok ? "" : " failed"}`, open: i < 3 || !x.ok },
+      h("summary", {}, x.title, x.ok ? null : h("span", { class: "chip-s bad" }, "command failed")),
+      x.command ? h("p", { class: "diag-cmd" }, h("code", {}, x.command), copyButton(x.command)) : null,
+      h("pre", {}, x.output))));
+}
+
+async function runDiagnose(f, slot) {
+  app.diag[f.id] = { loading: true };
+  slot.replaceChildren(diagPanel(f));
+  try {
+    const sections = await api("/api/diagnose", "POST", { id: f.id });
+    app.diag[f.id] = { sections };
+  } catch (e) {
+    app.diag[f.id] = { error: e.message };
+  }
+  slot.replaceChildren(diagPanel(f));
+}
+
+function diagButton(f, slot) {
+  if (!f.diag || !f.id) return null;
+  if (!app.live) return h("span", { class: "muted diag-hint", title: "Diagnose runs on the pmgr ui server" }, "Diagnose is available in pmgr ui");
+  const state = app.diag[f.id];
+  const b = h("button", { type: "button", class: "ghost diag-btn", disabled: state && state.loading }, state && state.sections ? "Diagnose again" : "Diagnose");
+  b.addEventListener("click", () => runDiagnose(f, slot));
+  return b;
+}
+
 function findingRow(f) {
+  const slot = h("div", { class: "diag-slot" }, diagPanel(f));
   return h(
     "li",
     { class: `finding ${f.severity}` },
@@ -173,7 +213,10 @@ function findingRow(f) {
         `${f.savings_note === "up to" ? "up to " : ""}${usd(f.savings_usd_month)}/mo`) : null),
     h("p", { class: "what" }, richText(f.message, false)),
     f.fix ? h("p", { class: "fix" }, richText(f.fix)) : null,
-    f.link ? h("p", { class: "ref" }, h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, `${linkLabel(f)} ↗`)) : null,
+    (f.link || f.diag) ? h("p", { class: "ref" },
+      diagButton(f, slot),
+      f.link ? h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, `${linkLabel(f)} ↗`) : null) : null,
+    slot,
   );
 }
 

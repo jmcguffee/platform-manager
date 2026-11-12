@@ -85,7 +85,7 @@ gh_source_failure() {
     "$GH_AUTH") fix='Run `gh auth login`, or `gh auth status` to see which account is active.' ;;
     "$GH_RATE") detail="GitHub API rate limit hit"; fix="Wait for the limit to reset, or lower max_runs_per_repo." ;;
     127) detail="The gh CLI isn't installed"; fix="brew install gh" ;;
-    *) fix='Run `gh api repos/'"$slug"'` to see the full error.' ;;
+    *) fix="GitHub returned an unexpected error, quoted above. If it keeps happening, check githubstatus.com." ;;
   esac
   source_row repo "$repo" false "$detail" "$fix"
 }

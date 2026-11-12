@@ -72,7 +72,7 @@ def base($what): {area: "oncall", resource: $what, link: "", evidence: {}};
               else "It's stable: confirm the fix and resolve it, or keep monitoring." end)} ),
 
   ( $monitors[] | select(.status == "alert")
-    | base("monitor/\(.id)") + {check: "oncall.monitor_alert", severity: "error", link: .url,
+    | base("monitor/\(.id)") + {check: "oncall.monitor_alert", severity: "error", link: .url, diag: {type: "monitor", id: .id},
         message: "Monitor alerting: \(.name)" + (if .triggered_min then " (since \(.triggered_min | since) ago)" else "" end)
           + (if .priority then ", P\(.priority)" else "" end),
         fix: "Open the monitor to see which group is alerting and its runbook link."} ),

@@ -80,9 +80,14 @@ serve_handle() {
       content-length) length=${line#*: } ;;
     esac
   done
-  # Drain any request body so the browser sees a clean response.
+  # Read a small request body (Diagnose sends {"id": ...}); anything else is drained.
+  local body=""
   case $length in '' | *[!0-9]*) length=0 ;; esac
-  [ "$length" -gt 0 ] && [ "$length" -lt 65536 ] && dd bs=1 count="$length" of=/dev/null 2>/dev/null
+  if [ "$length" -gt 0 ] && [ "$length" -lt 4096 ]; then
+    body=$(dd bs=1 count="$length" 2>/dev/null)
+  elif [ "$length" -gt 0 ] && [ "$length" -lt 65536 ]; then
+    dd bs=1 count="$length" of=/dev/null 2>/dev/null
+  fi
 
   case $path in *\?*) query=${path#*\?} path=${path%%\?*} ;; esac
   case "&$query&" in *"&t="*) token_q=${query#*t=} token_q=${token_q%%&*} ;; esac
@@ -105,6 +110,16 @@ serve_handle() {
       jq -c --argjson running "$([ -f "$SERVE_DIR/sync.running" ] && echo true || echo false)" \
         '. + {running: $running}' "$SERVE_DIR/state.json" >"$SERVE_DIR/resp.json"
       serve_respond "200 OK" "application/json" "$SERVE_DIR/resp.json" ;;
+    "POST /api/diagnose")
+      if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
+        serve_text "403 Forbidden" "Diagnose needs the token header."
+      else
+        # Only an id from the browser; what to inspect comes from pmgr's own report.
+        local id
+        id=$(jq -r '.id // ""' <<<"$body" 2>/dev/null | tr -cd 'a-z0-9')
+        "$PMGR_ROOT/bin/pmgr" __diagnose "${id:-none}" >"$SERVE_DIR/diag.json" 2>/dev/null || printf '[]' >"$SERVE_DIR/diag.json"
+        serve_respond "200 OK" "application/json" "$SERVE_DIR/diag.json"
+      fi ;;
     "POST /api/sync")
       if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
         serve_text "403 Forbidden" "Syncing needs the token header."

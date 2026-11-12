@@ -114,7 +114,7 @@ cluster_findings() {
         fix: "Run `aws eks update-kubeconfig --name <cluster> --profile \(.aws_profile) --alias \(.context)`."}
       elif .kubernetes == "unknown" then $base + {check: "cluster.unknown", severity: "error",
         message: "Cluster check for \(.name) failed: \(.detail)",
-        fix: "Run `kubectl --context \(.context) auth can-i get namespaces` to see the full error."}
+        fix: "Diagnose shows the full error from kubectl."}
       else empty end' <<<"$status"
 }
 

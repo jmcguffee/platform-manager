@@ -128,6 +128,7 @@ pmgr workloads              # pods, nodes, controllers and Warning events
 pmgr utilization            # over- and under-used databases, caches, Kafka and EKS capacity
 pmgr oncall                 # Datadog pages, incidents and alerting monitors
 pmgr security               # internet exposure by environment
+pmgr diagnose checkout      # logs, events and describe output for a matching finding
 pmgr argo                   # Argo CD health on every reachable cluster
 pmgr pipelines              # pipeline failures and workflow gaps
 pmgr doctor                 # everything, in the terminal
@@ -160,7 +161,20 @@ Press Ctrl+C in the terminal to stop it. The views:
 - **Argo CD:** Application problems by cluster.
 - **Sources:** everything pmgr tried to read, and why anything couldn't be read.
 
-Commands in a fix have a copy button.
+Commands in a fix have a copy button. Findings about something you can inspect have a
+**Diagnose** button: it runs the read-only commands you'd run by hand and shows their output under
+the finding, each with the exact command:
+
+- a crashing or failing pod: `describe pod`, its events, the previous (crashed) and current
+  container logs, and a `describe` of its Deployment or StatefulSet
+- nodes, PVCs and other objects: `describe` and their events
+- Argo CD apps: the resources that didn't sync and why, error conditions, unhealthy resources
+- failing pipelines: the run's jobs and steps, and each failed job's log
+- security groups: the rules and what's attached; load balancers: listeners and groups
+- AWS sessions: the full error and how the profile is set up; Datadog monitors: their state
+
+The browser sends only a finding's id; what to inspect comes from pmgr's own report. From the
+terminal, `pmgr diagnose checkout` does the same for the finding that matches.
 
 The page is served from your machine only: `pmgr ui` listens on 127.0.0.1, every request needs
 the random token in the link it prints, requests with any other Host header are refused (which
