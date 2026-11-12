@@ -219,7 +219,11 @@ pf_login() {
   [ -n "$sid" ] || { jq -cn --arg n "$name" '{error: "No argocd_secret for \($n). Add the Secrets Manager secret name under that cluster in your config."}'; return 1; }
   key=$(jq -r '.argocd_secret_key // "password"' <<<"$c")
   profile=$(jq -r '.argocd_secret_profile // .aws_profile' <<<"$c")
-  region=$(jq -r '.region // ""' <<<"$c")
+  # An ARN carries its own region (arn:aws:secretsmanager:REGION:ACCOUNT:secret:NAME); a name uses the cluster's.
+  case $sid in
+    arn:aws*:secretsmanager:*) region=$(printf '%s' "$sid" | cut -d: -f4) ;;
+    *) region=$(jq -r '.region // ""' <<<"$c") ;;
+  esac
   errf="$PMGR_TMP/pf-login.err"
   # The value stays in this function's memory and goes out through pipes only (printf is a builtin,
   # so it never shows up in a process listing).

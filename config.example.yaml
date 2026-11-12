@@ -32,7 +32,8 @@ clusters:
     #                                   # 8080 + the cluster's position, else a free port if that's taken
     # Argo CD login, read from AWS Secrets Manager with this cluster's profile and copied to the
     # clipboard (cleared after 60s). Never printed, logged or sent to the browser.
-    # argocd_secret: platform/argocd/admin   # secret name or ARN
+    # argocd_secret: platform/argocd/admin   # secret name, or full ARN (its region is used; another
+    #                                        # account's secret needs argocd_secret_profile or a resource policy)
     # argocd_secret_key: password            # if the secret is JSON, the key holding the password
     # argocd_secret_profile: shared-services # if the secret lives in another account
     # argocd_username: admin                 # shown with the password; else the JSON's username, else admin

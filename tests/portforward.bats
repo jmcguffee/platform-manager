@@ -151,6 +151,15 @@ login_setup() {
   [[ "$output" == *"password copied to the clipboard (user ops)"* ]] && [[ "$output" != *js0n* ]]
 }
 
+@test "login: a secret given by ARN is read in the ARN's region, even another account's" {
+  login_setup
+  config 'clusters:
+  - {name: staging, context: ctx-staging, aws_profile: stg, region: us-east-2, argocd_secret: "arn:aws:secretsmanager:us-west-2:333333333333:secret:argocd/admin-AbCdEf"}'
+  fake 0 'arn-Pw' '' aws secretsmanager get-secret-value --secret-id arn:aws:secretsmanager:us-west-2:333333333333:secret:argocd/admin-AbCdEf --region us-west-2
+  pf_login staging >/dev/null
+  [ "$(cat "$BATS_TEST_TMPDIR/clipboard")" = "arn-Pw" ]
+}
+
 @test "login errors say what to fix" {
   login_setup
   [[ "$(pf_login dev)" == *"No argocd_secret for dev"* ]]

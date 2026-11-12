@@ -211,7 +211,8 @@ works but the browser still can't connect, a proxy is taking `dev.localhost`: us
 Ports: `argocd_port` fixes one. Otherwise pmgr reuses the port it used last time, else 8080, 8081, …
 in config order, and if that one is taken, a free port the OS picks.
 
-Login: set `argocd_secret` on the cluster to the Secrets Manager secret holding the admin password
+Login: set `argocd_secret` on the cluster to the Secrets Manager secret (its name, or its full ARN,
+whose region is then used) holding the admin password
 (plain text, or JSON with `argocd_secret_key`, default `password`). **Copy password** reads it with
 your SSO session and puts it on your clipboard, cleared after 60 seconds. It never goes to the
 browser, the report, a log or the terminal.
