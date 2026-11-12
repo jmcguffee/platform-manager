@@ -460,8 +460,7 @@ is the seam for what comes next:
   appears in a command line, file, log, report, terminal output or the browser.
 - Tunnels listen on 127.0.0.1 only.
 - Temp files go in a private directory that's removed on exit.
-- CI runs ShellCheck and the test suite on macOS, with every action pinned to a
-  commit SHA.
+- `scripts/check` runs ShellCheck and the whole test suite; run it before pushing.
 
 See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
@@ -469,9 +468,10 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability.
 
 ```bash
 brew install bats-core shellcheck
-bats tests/
-shellcheck bin/pmgr lib/pmgr/*.sh
+scripts/check        # ShellCheck, then every test
 ```
+
+There's no CI on this repo; `scripts/check` is the gate.
 
 Tests put fake `aws`, `kubectl` and `gh` commands on PATH, so they never call AWS,
 Kubernetes or GitHub.
