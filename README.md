@@ -221,6 +221,16 @@ nowhere else, and report values are inserted as text, never as HTML.
 `pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
 with no network access at all.
 
+## Regions
+
+Utilization and security check every region you run in, account by account. Unless you say
+otherwise, that's the profile's own region (from `~/.aws/config`) plus every region a configured
+cluster in that account lives in, so a cluster in `us-west-2` brings `us-west-2` along. To list
+them yourself, set `aws.regions: [us-east-1, us-west-2]` for every account, or
+`utilization.regions` per profile. Findings and Diagnose name the region they came from. Prices
+come from the AWS Pricing API, which only answers in `us-east-1`; each resource is still priced
+for its own region.
+
 ## How it decides
 
 - **Not seeing isn't the same as not there.** If a token can't read something (a

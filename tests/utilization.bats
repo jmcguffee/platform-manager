@@ -29,7 +29,7 @@ rds() { jq -cn --arg id "$1" --arg class "$2" --arg engine "${3:-postgres}" --ar
     "DatabaseConnections/Maximum": 30, "FreeableMemory/Minimum": 8e9, "FreeStorageSpace/Minimum": 6e10}')
   [ "$(jq -r .check <<<"$got")" = rds.oversized ]
   [[ "$(jq -r .fix <<<"$got")" == *"db.r6g.xlarge"* ]]
-  [ "$(jq -r .resource <<<"$got")" = "acct/rds/orders (db.r6g.2xlarge)" ]
+  [ "$(jq -r .resource <<<"$got")" = "acct/us-east-1/rds/orders (db.r6g.2xlarge)" ]
   [ "$(jq -r '"\(.diag.type)=\(.diag.id)"' <<<"$got")" = "rds=orders" ]
 }
 
@@ -155,7 +155,7 @@ $(podj loose-5d6e7f8a9-a loose-5d6e7f8a9 "" "")")
   run util_account_sweep shared shared
   [ "$status" -eq 0 ]
   [[ "$output" == *rds.oversized* ]]
-  [ "$(cat "$PMGR_TMP/unseen.txt")" = "shared: couldn't list Redshift" ]
+  [ "$(cat "$PMGR_TMP/unseen.txt")" = "shared (us-east-1): couldn't list Redshift" ]
   grep -q "cloudwatch get-metric-data --metric-data-queries file://" "$FAKE_DIR/calls"
   ! grep -qE $'\t(.* )?(create|delete|modify|put|update|start|stop)' "$FAKE_DIR/calls"
 }
@@ -197,4 +197,39 @@ $(podj loose-5d6e7f8a9-a loose-5d6e7f8a9 "" "")")
   # Two on-demand nodes at $0.192/h plus the $73 control plane; the spot node isn't priced.
   [ "$(jq -r 'select(.kind == "eks") | "\(.monthly_usd) \(.spot_nodes)"' <<<"$priced")" = "353.32 1" ]
   [ "$(jq -r 'select(.check == "eks.idle_nodes") | .savings_usd_month' <<<"$priced")" = 140.16 ]
+}
+
+@test "regions: an override per profile, a list for every account, else the profile's region plus its clusters' regions" {
+  printf '[profile shared]\nregion = us-east-2\n' >"$AWS_CONFIG_FILE"
+  printf '%s' '[{"name": "west", "context": "arn:aws:eks:us-west-2:111111111111:cluster/west", "auth": {"account": "111111111111"}},
+                {"name": "east", "context": "arn:aws:eks:us-east-2:111111111111:cluster/east", "auth": {"account": "111111111111"}},
+                {"name": "eu", "context": "kind-eu", "region": "eu-west-1", "auth": {"account": "111111111111"}},
+                {"name": "other", "context": "arn:aws:eks:ap-south-1:222222222222:cluster/other", "auth": {"account": "222222222222"}}]' \
+    >"$PMGR_TMP/clusters.json"
+  [ "$(util_regions shared 111111111111 | tr '\n' ' ')" = "us-east-2 us-west-2 eu-west-1 " ]
+  [ "$(util_regions nothing | tr '\n' ' ')" = "us-east-1 " ]
+  config 'clusters: []
+aws: {regions: [us-east-1, us-west-2]}
+utilization: {regions: {shared: ca-central-1, multi: [eu-west-1, eu-central-1]}}'
+  [ "$(util_regions other 222222222222 | tr '\n' ' ')" = "us-east-1 us-west-2 " ]
+  [ "$(util_regions shared 111111111111 | tr '\n' ' ')" = "ca-central-1 " ]
+  [ "$(util_regions multi | tr '\n' ' ')" = "eu-west-1 eu-central-1 " ]
+  run config 'aws: {regions: us-east-1}'
+  [[ "$output" == *"aws.regions must be a list of regions"* ]]
+}
+
+@test "the account sweep covers every region, each with its own region in names and notes" {
+  config 'clusters: []
+aws: {regions: [us-east-1, us-west-2]}'
+  fake 0 '{"DBInstances": [{"DBInstanceIdentifier": "orders", "DBInstanceClass": "db.r6g.2xlarge", "Engine": "postgres", "AllocatedStorage": 100}]}' "" aws rds describe-db-instances
+  fake 254 "" "AccessDenied" aws redshift describe-clusters --profile shared --region us-west-2
+  fake 0 '{"Clusters": []}' "" aws redshift describe-clusters --profile shared --region us-east-1
+  fake 0 '{"CacheClusters": []}' "" aws elasticache describe-cache-clusters
+  fake 0 '{"ClusterInfoList": []}' "" aws kafka list-clusters-v2
+  fake 0 "$(jq -cn '{MetricDataResults: [range(6) | {Id: "m\(.)", Timestamps: [range(48) | . * 3600 | todateiso8601], Values: [range(48) | 3]}]}')" "" aws cloudwatch get-metric-data
+  : >"$PMGR_TMP/unseen.txt"
+  got=$(util_account_sweep shared shared)
+  [ "$(jq -r 'select(.check == "rds.oversized") | .resource' <<<"$got" | tr '\n' ' ')" = "shared/us-east-1/rds/orders (db.r6g.2xlarge) shared/us-west-2/rds/orders (db.r6g.2xlarge) " ]
+  [ "$(jq -r 'select(.check == "rds.oversized") | .diag.region' <<<"$got" | tr '\n' ' ')" = "us-east-1 us-west-2 " ]
+  [ "$(cat "$PMGR_TMP/unseen.txt")" = "shared (us-west-2): couldn't list Redshift" ]
 }

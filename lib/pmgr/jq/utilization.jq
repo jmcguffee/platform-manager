@@ -28,7 +28,7 @@ def can_shrink: (size_down != null) or (burstable | not);
 | ($in.queries | map({key: "\(.service)|\(.resource)|\(.broker // "")|\(.metric)|\(.stat)", value: ($byid[.id] // {ts: [], v: []})})
    | from_entries) as $s
 | def vals($svc; $res; $metric; $stat): ($s["\($svc)|\($res)||\($metric)|\($stat)"] // {v: []}).v;
-  def base($svc; $res; $target): {area: "utilization", resource: "\($in.label)/\($svc)/\($res)", link: "", evidence: {},
+  def base($svc; $res; $target): {area: "utilization", resource: "\($in.label)/\($in.region)/\($svc)/\($res)", link: "", evidence: {},
                                    svc: $svc, target: $target, diag: {type: $svc, profile: $in.label, region: $in.region, id: $target}};
   def enough($v): ($v | length) >= 24;
   def window: "\($in.days) days";

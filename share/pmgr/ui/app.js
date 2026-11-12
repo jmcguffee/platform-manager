@@ -874,10 +874,11 @@ function utilization() {
   const container = h("div");
   const draw = () => {
     const list = all.filter(passes);
-    // "account/service/resource": group by account and service.
+    // "account/region/service/resource" (or "cluster/eks/what"): group by account, region and service.
     const key = (f) => {
-      const [where, service] = f.resource.split("/");
-      return `${where} › ${SERVICE[service] || service}`;
+      const parts = f.resource.split("/");
+      const [where, region, service] = SERVICE[parts[1]] ? [parts[0], "", parts[1]] : parts;
+      return `${where}${region ? ` (${region})` : ""} › ${SERVICE[service] || service}`;
     };
     container.replaceChildren(
       ...(list.length ? grouped(list, key, () => true) : [h("p", { class: "empty" }, all.length ? "No findings match these filters." : "Nothing is notably over- or under-used.")]),
@@ -888,24 +889,24 @@ function utilization() {
   const rds = metrics("rds");
   if (rds.length) svcTables.push(h("h2", {}, "RDS"), table(
     [["Instance"], ["Account"], ["Class"], ["Engine"], ["CPU avg", 1], ["CPU p95", 1], ["CPU max", 1], ["Connections", 1], ["Free storage", 1], ["$/month", 1]],
-    rds.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name), m.multi_az ? h("small", { class: "muted" }, " Multi-AZ") : null), h("td", {}, m.account),
+    rds.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name), m.multi_az ? h("small", { class: "muted" }, " Multi-AZ") : null), h("td", {}, m.region ? `${m.account} (${m.region})` : m.account),
       h("td", {}, m.class), h("td", {}, m.engine), pcell(m.cpu_avg), pcell(m.cpu_p95, 80), pcell(m.cpu_max), h("td", { class: "n" }, num(m.connections_max)),
       h("td", { class: `n ${m.free_storage_pct != null && m.free_storage_pct < 15 ? "warn" : ""}` }, m.free_storage_pct == null ? "–" : `${m.free_storage_pct}%`),
       h("td", { class: "n" }, usd(m.monthly_usd))))));
   const cache = metrics("elasticache");
   if (cache.length) svcTables.push(h("h2", {}, "ElastiCache"), table(
     [["Cluster"], ["Account"], ["Nodes", 1], ["Node type"], ["CPU avg", 1], ["CPU p95", 1], ["Memory max", 1], ["Evictions", 1], ["$/month", 1]],
-    cache.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
+    cache.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.region ? `${m.account} (${m.region})` : m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
       pcell(m.cpu_avg), pcell(m.cpu_p95, 80), pcell(m.memory_max, 80), h("td", { class: `n ${m.evictions ? "warn" : ""}` }, num(m.evictions)), h("td", { class: "n" }, usd(m.monthly_usd))))));
   const rs = metrics("redshift");
   if (rs.length) svcTables.push(h("h2", {}, "Redshift"), table(
     [["Cluster"], ["Account"], ["Nodes", 1], ["Node type"], ["CPU avg", 1], ["CPU p95", 1], ["Disk used", 1], ["$/month", 1]],
-    rs.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
+    rs.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.region ? `${m.account} (${m.region})` : m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
       pcell(m.cpu_avg), pcell(m.cpu_p95, 80), pcell(m.disk_used_max, 80), h("td", { class: "n" }, usd(m.monthly_usd))))));
   const msk = metrics("msk");
   if (msk.length) svcTables.push(h("h2", {}, "MSK"), table(
     [["Cluster"], ["Account"], ["Brokers", 1], ["Broker type"], ["CPU avg", 1], ["CPU p95", 1], ["Disk used", 1], ["$/month", 1]],
-    msk.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
+    msk.map((m) => h("tr", {}, h("td", {}, h("b", {}, m.name)), h("td", {}, m.region ? `${m.account} (${m.region})` : m.account), h("td", { class: "n" }, num(m.nodes)), h("td", {}, m.class),
       pcell(m.cpu_avg), pcell(m.cpu_p95, 60), pcell(m.disk_used_max, 75), h("td", { class: "n" }, usd(m.monthly_usd))))));
   const eks = metrics("eks");
   if (eks.length) svcTables.push(h("h2", {}, "EKS"), table(

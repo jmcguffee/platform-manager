@@ -23,11 +23,20 @@ sec_read() {
   fi
 }
 
-# security_account LABEL PROFILE ACCOUNT_ID : findings for one account (its configured region).
+# security_account LABEL PROFILE ACCOUNT_ID : findings for one account, in each of its regions.
 security_account() {
-  local label=$1 profile=$2 account=$3 region missing="" svc
-  region=$(util_region "$profile")
-  SEC_DIR="$PMGR_TMP/sec/$(safe_key "$profile")"
+  local region first=1
+  while IFS= read -r region; do
+    security_region "$1" "$2" "$3" "$region" "$first"
+    first=0
+  done < <(util_regions "$2" "$3")
+}
+
+# security_region LABEL PROFILE ACCOUNT_ID REGION FIRST : one region. S3 Block Public Access is
+# account-wide, so only the first region reads it.
+security_region() {
+  local label=$1 profile=$2 account=$3 region=$4 first=${5:-1} missing="" svc
+  SEC_DIR="$PMGR_TMP/sec/$(safe_key "$profile-$region")"
   mkdir -p "$SEC_DIR"
 
   sec_read sgs "$profile" "$region" ec2 describe-security-groups &
@@ -42,7 +51,9 @@ security_account() {
   for svc in sgs lbs instances; do [ "$(cat "$SEC_DIR/$svc.json")" = null ] && missing="$missing $svc"; done
 
   # S3 Block Public Access: "no configuration" means every setting is off.
-  if capture "sec-s3pab" aws s3control get-public-access-block --account-id "$account" --profile "$profile" \
+  if [ "$first" != 1 ]; then
+    printf 'null' >"$SEC_DIR/s3pab.json"
+  elif capture "sec-s3pab" aws s3control get-public-access-block --account-id "$account" --profile "$profile" \
     --region "$region" --output json --cli-connect-timeout 5 --cli-read-timeout 15; then
     cp "$PMGR_TMP/sec-s3pab.out" "$SEC_DIR/s3pab.json"
   elif err sec-s3pab | grep -q NoSuchPublicAccessBlockConfiguration; then
@@ -97,6 +108,7 @@ security_account() {
 # security_sweep : every account with a working session, once per AWS account.
 security_sweep() {
   local a
+  util_skipped
   while IFS= read -r a; do
     [ -n "$a" ] || continue
     security_account "$(jq -r .label <<<"$a")" "$(jq -r .profile <<<"$a")" "$(jq -r .account <<<"$a")"

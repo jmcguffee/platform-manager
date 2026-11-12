@@ -15,6 +15,9 @@ aws:
   refresh_command: [aws, sso, login, --profile, "{profile}"]
   # SSO accounts with no cluster, checked by `pmgr status`.
   profiles: []
+  # Regions to check in every account (utilization and security). Leave empty to use each
+  # profile's own region plus every region a configured cluster in that account runs in.
+  regions: []           # e.g. [us-east-1, us-west-2]
 
 # One entry per cluster. `pmgr init --from-kubeconfig` fills these in for you.
 clusters:
@@ -52,7 +55,8 @@ utilization:
   storage_free_low: 15  # RDS free storage %
   disk_high: 80         # Redshift disk used %
   memory_high: 80       # ElastiCache memory used %
-  regions: {}           # region per profile when ~/.aws/config doesn't set one, e.g. {prod-platform: us-east-2}
+  regions: {}           # per-profile override of aws.regions: one region or a list,
+                        # e.g. {prod-platform: [us-east-1, us-west-2], legacy: us-east-2}
 
 security:
   # Which tag says what environment a resource is in. Resources without it fall back to their VPC's

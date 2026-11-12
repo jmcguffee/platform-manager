@@ -3,6 +3,21 @@
 # requests, capacity and metrics-server. Read-only: describe/list calls and GetMetricData.
 
 # The accounts to check: every profile with a working session, once per AWS account.
+# util_skipped : note each account no sweep could read because its AWS session isn't working.
+# Not seeing isn't the same as nothing there, so the report says what wasn't checked.
+util_skipped() {
+  local line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    grep -qxF "$line" "$PMGR_TMP/unseen.txt" 2>/dev/null || printf '%s\n' "$line" >>"$PMGR_TMP/unseen.txt"
+  done < <(jq -rs '[.[0][], .[1][] | {profile: .aws_profile, state: (.auth.state // "unknown")}]
+      | map(select(.state != "ok" and .state != "expiring")) | unique_by(.profile)[]
+      | ({expired: "AWS session expired", no_access: "no access", no_profile: "no such AWS profile", network: "AWS unreachable",
+          no_cli: "no AWS CLI", wrong_role: "wrong role"}[.state] // "AWS session not working (\(.state))") as $why
+      | "\(.profile): \($why), so its accounts weren'"'"'t checked for utilization or security"' \
+      "$PMGR_TMP/clusters.json" "$PMGR_TMP/accounts.json" 2>/dev/null)
+}
+
 util_accounts() {
   jq -sc '[.[0][] | {label: .name, profile: .aws_profile, account: .auth.account, state: .auth.state}]
           + [.[1][] | {label: .name, profile: .aws_profile, account: .auth.account, state: .auth.state}]
@@ -11,11 +26,30 @@ util_accounts() {
     "$PMGR_TMP/clusters.json" "$PMGR_TMP/accounts.json"
 }
 
-util_region() {
-  local r
-  r=$(jq -r --arg p "$1" '.utilization.regions[$p] // ""' <<<"$PMGR_CONFIG_JSON")
-  [ -n "$r" ] || r=$(aws_setting "$1" region)
-  printf '%s' "${r:-us-east-1}"
+# util_regions PROFILE ACCOUNT : the regions to check in that account, one per line.
+#   utilization.regions[PROFILE] (one region or a list) > aws.regions (every account) >
+#   the profile's own region plus every region a configured cluster in that account runs in.
+util_regions() {
+  local profile=$1 account=${2:-} r
+  r=$(jq -r --arg p "$profile" '(.utilization.regions[$p] // .aws.regions // []) | if type == "string" then . else .[] end' <<<"$PMGR_CONFIG_JSON")
+  if [ -z "$r" ]; then
+    r=$(aws_setting "$profile" region)
+    if [ -n "$account" ] && [ -f "$PMGR_TMP/clusters.json" ]; then
+      r=$(printf '%s\n' "$r"; jq -r --arg a "$account" '.[] | select(.auth.account == $a)
+        | .region // (.context | select(startswith("arn:aws") and (split(":") | length) >= 6) | split(":")[3]) // empty' "$PMGR_TMP/clusters.json")
+    fi
+  fi
+  r=$(printf '%s\n' "$r" | grep -E '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$' | awk '!seen[$0]++')
+  printf '%s\n' "${r:-us-east-1}"
+}
+util_region() { util_regions "$1" | head -n 1; }
+
+# util_account_sweep LABEL PROFILE ACCOUNT : every region of one account.
+util_account_sweep() {
+  local region
+  while IFS= read -r region; do
+    util_region_sweep "$1" "$2" "$region"
+  done < <(util_regions "$2" "${3:-}")
 }
 
 # util_describe KEY PROFILE REGION ARGS... : one describe call into $dir/KEY.json, "null" if unreadable.
@@ -31,11 +65,10 @@ util_describe() {
 }
 
 # util_account_sweep LABEL PROFILE : findings for one account's managed data services.
-util_account_sweep() {
-  local label=$1 profile=$2 region days
-  region=$(util_region "$profile")
+util_region_sweep() {
+  local label=$1 profile=$2 region=$3 days
   days=$(cfg '.utilization.lookback_days // 14')
-  UTIL_DIR="$PMGR_TMP/util/$(safe_key "$profile")"
+  UTIL_DIR="$PMGR_TMP/util/$(safe_key "$profile-$region")"
   mkdir -p "$UTIL_DIR"
 
   util_describe rds "$profile" "$region" rds describe-db-instances &
@@ -60,7 +93,7 @@ util_account_sweep() {
 
   local missing="" svc
   for svc in rds redshift cache kafka; do [ "$(cat "$UTIL_DIR/$svc.json")" = null ] && missing="$missing $svc"; done
-  [ -z "$missing" ] || printf "%s: couldn't list%s\n" "$label" "$(printf '%s' "$missing" |
+  [ -z "$missing" ] || printf "%s (%s): couldn't list%s\n" "$label" "$region" "$(printf '%s' "$missing" |
     sed 's/ rds/ RDS,/; s/ redshift/ Redshift,/; s/ cache/ ElastiCache,/; s/ kafka/ MSK,/; s/,$//')" >>"$PMGR_TMP/unseen.txt"
 
   local resources queries
@@ -85,7 +118,7 @@ util_account_sweep() {
         --start-time "$start" --end-time "$end" --profile "$profile" --region "$region" --output json)
       [ -n "$token" ] && args+=(--next-token "$token")
       if ! capture "util-cw-$i" aws "${args[@]}"; then
-        printf "%s: couldn't read CloudWatch metrics\n" "$label" >>"$PMGR_TMP/unseen.txt"
+        printf "%s (%s): couldn't read CloudWatch metrics\n" "$label" "$region" >>"$PMGR_TMP/unseen.txt"
         return 0
       fi
       results=$(jq -c --argjson have "$results" '$have + (.MetricDataResults // [])' "$PMGR_TMP/util-cw-$i.out")
@@ -164,9 +197,10 @@ util_eks() {
 # utilization_sweep : every account and every reachable cluster.
 utilization_sweep() {
   local a c
+  util_skipped
   while IFS= read -r a; do
     [ -n "$a" ] || continue
-    util_account_sweep "$(jq -r .label <<<"$a")" "$(jq -r .profile <<<"$a")"
+    util_account_sweep "$(jq -r .label <<<"$a")" "$(jq -r .profile <<<"$a")" "$(jq -r .account <<<"$a")"
   done < <(util_accounts | jq -c '.[]')
   while IFS= read -r c; do
     [ -n "$c" ] || continue

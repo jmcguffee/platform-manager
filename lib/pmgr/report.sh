@@ -76,7 +76,9 @@ report_text() {
         | [range(0; 5) as $i | [$t[][$i] | length] | max] as $w
         | ($t[] | [range(0; 5) as $i | .[$i] | pad($w[$i])] | join("  ") | sub(" +$"; "")), ""
        else empty end),
-      (if ($shown | length) == 0 then c("32"; if $hidden > 0 then "No warnings or errors." else "No problems found." end)
+      (if ($shown | length) == 0 then
+         (if (.unseen | length) > 0 then c("33"; "No problems in what pmgr could check, but some things weren'"'"'t checked (listed below).")
+          else c("32"; if $hidden > 0 then "No warnings or errors." else "No problems found." end) end)
        else empty end),
       ($shown | group_by(.area) | sort_by(.[0].area as $a | ["auth","oncall","security","cluster","workload","utilization","argo","pipeline","workflow"] | index($a))[]
         | c("1"; $titles[.[0].area] // .[0].area),

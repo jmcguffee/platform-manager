@@ -81,7 +81,11 @@ config_load() {
       (if ([.clusters // [] | .[].name] | length) != ([.clusters // [] | .[].name] | unique | length)
        then "Cluster names must be unique" else empty end),
       (if (.aws.refresh_command // ["aws"]) | (type != "array" or length == 0 or any(type != "string"))
-       then "aws.refresh_command must be a list of strings" else empty end)
+       then "aws.refresh_command must be a list of strings" else empty end),
+      (if (.aws.regions // []) | (type != "array" or any(type != "string"))
+       then "aws.regions must be a list of regions, e.g. [us-east-1, us-west-2]" else empty end),
+      (.utilization.regions // {} | to_entries[] | select((.value | type) as $t | ($t != "string" and $t != "array"))
+       | "utilization.regions.\(.key) must be a region or a list of regions")
     ] | first // empty' <<<"$PMGR_CONFIG_JSON")
   [ -z "$problem" ] || die "Config error in $path: $problem"
   export PMGR_CONFIG_JSON
