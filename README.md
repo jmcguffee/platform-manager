@@ -370,9 +370,14 @@ it runs in, and judges it by environment:
   assume; roles trusting anyone, or an account that isn't yours without an ExternalId; admin roles
   and `iam:PassRole` on `*`; roles unused for 90 days; IAM users without MFA or with old keys; root
   access keys or no root MFA; no logging CloudTrail; GuardDuty off; EBS not encrypted by default.
-- **Compute & EBS**: IMDSv1 (reported once per node group or ASG); unencrypted volumes; unattached
+- **Compute & network**: IMDSv1 (reported once per node group or ASG); unencrypted volumes; unattached
   volumes, gp2 volumes and idle Elastic IPs with what they cost; old snapshots; previous-generation
-  instance types; instances stopped for over 30 days.
+  instance types; instances stopped for over 30 days; NAT gateways that sit idle (about $33 a month
+  each), run one per zone outside prd, or rack up data charges (bytes from CloudWatch over 14 days),
+  and VPCs whose S3 traffic pays NAT charges for lack of a free gateway endpoint.
+
+Every finding in the dashboard has **Copy as ticket**: a title, priority, what's wrong, the fix, where
+it's defined in code and links, ready to paste into Jira or a GitHub issue.
 
 Everything is a describe, list or get call; `ReadOnlyAccess` or `SecurityAudit` covers it. A call
 your role can't make is listed under "not checked", never treated as clean. Savings feed the

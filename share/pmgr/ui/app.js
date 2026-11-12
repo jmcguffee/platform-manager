@@ -120,14 +120,14 @@ function h(tag, attrs, ...kids) {
 
 function plural(n, one, many) { return `${n} ${n === 1 ? one : many}`; }
 
-function copyButton(text) {
-  const b = h("button", { class: "copy", type: "button", "aria-label": `Copy ${text}` }, "Copy");
+function copyButton(text, label = "Copy", aria = `Copy ${text}`) {
+  const b = h("button", { class: "copy", type: "button", "aria-label": aria }, label);
   b.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(text);
       b.textContent = "Copied";
       b.classList.add("done");
-      setTimeout(() => { b.textContent = "Copy"; b.classList.remove("done"); }, 1500);
+      setTimeout(() => { b.textContent = label; b.classList.remove("done"); }, 1500);
     } catch { b.textContent = "Select and copy"; }
   });
   return b;
@@ -335,6 +335,23 @@ function diagButton(f, slot) {
   return b;
 }
 
+// A finding as a ticket for Jira or a GitHub issue: title, what's wrong, the fix, where it's defined.
+const SEV_PRIORITY = { critical: "Highest", error: "High", warning: "Medium", info: "Low" };
+function ticketText(f) {
+  const title = `[${SEV_LABEL[f.severity]}] ${f.message.length > 110 ? `${f.message.slice(0, 107)}…` : f.message}`;
+  return [
+    title, "",
+    `Resource: ${f.resource}`,
+    `Priority: ${SEV_PRIORITY[f.severity] || "Medium"}`,
+    f.savings_usd_month ? `Saves: ${f.savings_note === "up to" ? "up to " : ""}${usd(f.savings_usd_month)}/month` : null,
+    "", "What's wrong", f.message,
+    f.fix ? ["", "Fix", f.fix] : null,
+    f.where && f.where.length ? ["", "Where it's defined", ...f.where.map((w) => `- ${w.repo}/${w.path}:${w.line} ${w.url}`)] : null,
+    f.link ? ["", `More: ${f.link}`] : null,
+    "", `Found by pmgr (${f.check}) on ${new Date(app.report.generated_at).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`,
+  ].flat(2).filter((x) => x !== null).join("\n");
+}
+
 function findingRow(f) {
   const slot = h("div", { class: "diag-slot" }, diagPanel(f));
   return h(
@@ -350,9 +367,10 @@ function findingRow(f) {
     f.fix ? h("p", { class: "fix" }, richText(f.fix)) : null,
     f.where && f.where.length ? h("p", { class: "where-code" }, "Defined in ",
       f.where.map((w, i) => [i ? ", " : "", h("a", { href: w.url, target: "_blank", rel: "noopener noreferrer" }, `${w.repo}/${w.path}:${w.line}`)])) : null,
-    (f.link || f.diag) ? h("p", { class: "ref" },
+    h("p", { class: "ref" },
       diagButton(f, slot),
-      f.link ? h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, `${linkLabel(f)} ↗`) : null) : null,
+      copyButton(ticketText(f), "Copy as ticket", "Copy this finding as a ticket"),
+      f.link ? h("a", { href: f.link, target: "_blank", rel: "noopener noreferrer" }, `${linkLabel(f)} ↗`) : null),
     slot,
   );
 }
@@ -993,8 +1011,8 @@ function identity() {
 }
 function compute() {
   return areaView("compute", {
-    bad: "Compute needs fixing.", warn: "Compute has gaps.", good: "Compute is set up well.",
-    sub: "Instance metadata (IMDSv1 lets an SSRF bug steal the instance role), unencrypted EBS, unattached volumes, gp2 that should be gp3, idle Elastic IPs, old snapshots, previous-generation instances and long-stopped ones, with what each costs.",
+    bad: "Compute needs fixing.", warn: "Compute and network have gaps.", good: "Compute and network are set up well.",
+    sub: "Instance metadata (IMDSv1 lets an SSRF bug steal the instance role), unencrypted EBS, unattached volumes, gp2 that should be gp3, idle Elastic IPs, old snapshots, previous-generation and long-stopped instances, and NAT gateways: idle, one per zone outside prd, heavy data charges, S3 without a free gateway endpoint. Each with what it costs.",
     empty: "No EC2 or EBS problems.", filter: "Filter by account, node group, volume or instance" });
 }
 
@@ -1250,7 +1268,7 @@ const RENDER = { overview, actions, weekly, oncall, access, security, workloads,
 const NAV = [
   ["Today", [["overview", "Overview"], ["actions", "Action items"], ["weekly", "Weekly report"], ["oncall", "On-call"]]],
   ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["apps", "App config"], ["traffic", "Load balancing"], ["lifecycle", "Lifecycle"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
-  ["AWS posture", [["edge", "Edge & WAF"], ["data", "Data stores"], ["identity", "Identity & IAM"], ["compute", "Compute & EBS"]]],
+  ["AWS posture", [["edge", "Edge & WAF"], ["data", "Data stores"], ["identity", "Identity & IAM"], ["compute", "Compute & network"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
   ["System", [["sources", "Sources"]]],
 ];

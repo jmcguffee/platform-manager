@@ -20,7 +20,8 @@ posture_cfg() { # LABEL REGION
         cert_warn_days: (.posture.cert_warn_days // 30), snapshot_old_days: (.posture.snapshot_old_days // 365),
         ebs_gb_month: ({gp2: 0.10, gp3: 0.08, io1: 0.125, io2: 0.125, st1: 0.045, sc1: 0.015, standard: 0.05} + (.cost.ebs_gb_month // {})),
         snapshot_gb_month: (.cost.snapshot_gb_month // 0.05), ipv4_month: (.cost.public_ipv4_month // 3.65),
-        secret_month: (.cost.secret_month // 0.40)} | tojson' | jq -c --arg l "$1" --arg r "$2" '. + {label: $l, region: $r}'
+        secret_month: (.cost.secret_month // 0.40), nat_hour: (.cost.nat_hour // 0.045), nat_gb: (.cost.nat_gb // 0.045),
+        nat_busy_usd: (.posture.nat_processing_warn_usd // 100)} | tojson' | jq -c --arg l "$1" --arg r "$2" '. + {label: $l, region: $r}'
 }
 
 # pwait N : wait until fewer than N background jobs are running (bash 3.2 has no wait -n).
@@ -142,7 +143,26 @@ posture_region() {
   pread "$dir/snapshots.json" "$label" "EBS snapshots" "$p" "$r" ec2 describe-snapshots --owner-ids self &
   pread "$dir/ebs_default.json" "$label" "" "$p" "$r" ec2 get-ebs-encryption-by-default &
   pread "$dir/guardduty.json" "$label" "GuardDuty" "$p" "$r" guardduty list-detectors &
+  pread "$dir/nat.json" "$label" "NAT gateways" "$p" "$r" ec2 describe-nat-gateways --filter Name=state,Values=available &
+  pread "$dir/endpoints.json" "$label" "VPC endpoints" "$p" "$r" ec2 describe-vpc-endpoints &
   wait
+
+  # Bytes each NAT gateway processed over 14 days (what its data charge is billed on).
+  printf '[]' >"$dir/nat_metrics.json"
+  if [ "$(jq '.NatGateways // [] | length' "$dir/nat.json" 2>/dev/null)" -gt 0 ] 2>/dev/null; then
+    jq -c '[.NatGateways | to_entries[] | .key as $i | .value.NatGatewayId as $id
+      | ("BytesInFromSource", "BytesInFromDestination") as $m
+      | {Id: "n\($i)\(if $m == "BytesInFromSource" then "s" else "d" end)", Label: $id,
+         MetricStat: {Metric: {Namespace: "AWS/NATGateway", MetricName: $m, Dimensions: [{Name: "NatGatewayId", Value: $id}]},
+                      Period: 1209600, Stat: "Sum"}}]' "$dir/nat.json" >"$dir/nat_queries.json"
+    local end start
+    end=$(jq -rn --arg n "${PMGR_NOW:-}" '(if $n == "" then now else ($n | tonumber) end) | floor | todateiso8601')
+    start=$(jq -rn --arg e "$end" '$e | fromdateiso8601 - 1209600 | todateiso8601')
+    pread "$dir/nat_cw.json" "$label" "NAT gateway traffic (CloudWatch)" "$p" "$r" cloudwatch get-metric-data \
+      --metric-data-queries "file://$dir/nat_queries.json" --start-time "$start" --end-time "$end"
+    jq -c '[.MetricDataResults // [] | group_by(.Label)[] | {id: .[0].Label, bytes: ([.[].Values[]?] | add // 0)}]' \
+      "$dir/nat_cw.json" >"$dir/nat_metrics.json" 2>/dev/null || printf '[]' >"$dir/nat_metrics.json"
+  fi
 
   # Load balancers: listeners, attributes and tags.
   i=0
@@ -218,13 +238,15 @@ posture_input() {
     --slurpfile instances "$d/instances.json" --slurpfile volumes "$d/volumes.json" --slurpfile addresses "$d/addresses.json" \
     --slurpfile snapshots "$d/snapshots.json" --slurpfile ebs_default "$d/ebs_default.json" --slurpfile guardduty "$d/guardduty.json" \
     --argjson gd_detector "$(cat "$d/guardduty_detector.json" 2>/dev/null || printf 'null')" \
+    --slurpfile nat "$d/nat.json" --slurpfile endpoints "$d/endpoints.json" --slurpfile nat_metrics "$d/nat_metrics.json" \
     '{label: $label, region: $region, first: $first, now: $now,
       iam: $iam[0], summary: $summary[0], oidc: $oidc[0], cf: $cf[0], trails: $trails[0], trail_status: $trail_status,
       waf_cf: [$waf_cf[] | .WebACL // empty], users: $users, buckets: $buckets,
       lbs: $lbs[0], sgs: $sgs[0], vpcs: $vpcs[0], lb_detail: $lb_detail, waf: $waf, acm: [$acm[] | .Certificate // empty],
       rds: $rds[0], aurora: $aurora[0], redshift: $redshift[0], rs_detail: $rs_detail, cache: $cache[0], secrets: $secrets[0],
       instances: $instances[0], volumes: $volumes[0], addresses: $addresses[0], snapshots: $snapshots[0],
-      ebs_default: $ebs_default[0], guardduty: $guardduty[0], gd_detector: $gd_detector}'
+      ebs_default: $ebs_default[0], guardduty: $guardduty[0], gd_detector: $gd_detector,
+      nat: $nat[0], endpoints: $endpoints[0], nat_metrics: $nat_metrics[0]}'
 }
 
 # posture_account LABEL PROFILE ACCOUNT : read everything, then run each rule set per region.

@@ -170,6 +170,19 @@ GH='"Principal": {"Federated": "arn:aws:iam::111111111111:oidc-provider/token.ac
   [ "$(jq -r 'select(.check == "compute.snapshots_old") | .savings_note' <<<"$got")" = "up to" ]
 }
 
+@test "compute: an idle NAT gateway, one per zone outside prd, heavy processing, and S3 without a gateway endpoint" {
+  nat() { jq -cn --arg id "$1" --arg vpc "$2" --arg n "$3" '{NatGatewayId: $id, VpcId: $vpc, Tags: [{Key: "Name", Value: $n}]}'; }
+  got=$(rules compute "{\"nat\": {\"NatGateways\": [$(nat nat-a vpc-dev dev-a), $(nat nat-b vpc-dev dev-b), $(nat nat-p vpc-prd prd-a)]},
+    \"nat_metrics\": [{\"id\": \"nat-a\", \"bytes\": 2e8}, {\"id\": \"nat-b\", \"bytes\": 5e10}, {\"id\": \"nat-p\", \"bytes\": 2e12}],
+    \"vpcs\": {\"Vpcs\": [{\"VpcId\": \"vpc-dev\", \"Tags\": [{\"Key\": \"Environment\", \"Value\": \"dev\"}]}, {\"VpcId\": \"vpc-prd\", \"Tags\": [{\"Key\": \"Environment\", \"Value\": \"prd\"}]}]},
+    \"endpoints\": {\"VpcEndpoints\": [{\"VpcId\": \"vpc-prd\", \"VpcEndpointType\": \"Gateway\", \"ServiceName\": \"com.amazonaws.us-east-2.s3\"}]}}")
+  [ "$(jq -r 'select(.check) | "\(.resource | split("/") | .[3:] | join("/"))=\(.check)"' <<<"$got" | sort | tr '\n' ' ')" = \
+    "nat-a=compute.nat_idle nat-p=compute.nat_processing vpc-dev/s3-endpoint=compute.no_s3_endpoint vpc-dev=compute.nat_per_az_outside_prd " ]
+  [ "$(jq -r 'select(.check == "compute.nat_idle") | .savings_usd_month' <<<"$got")" = 32.85 ]
+  [[ "$(msg compute.nat_processing <<<"$got")" == *"about 4285 GB a month, about \$192.86 in data charges on top of \$32.85"* ]]
+  [ "$(jq -r 'select(.check == "compute.nat_per_az_outside_prd") | .savings_usd_month' <<<"$got")" = 32.85 ]
+}
+
 # --- the collector --------------------------------------------------------------------------
 @test "the collector makes only describe, list and get calls, per region, and says what it couldn't read" {
   config 'clusters: []

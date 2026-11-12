@@ -47,6 +47,42 @@ include "posture";
         fix: "Change them to gp3 in place (no downtime), and make gp3 the default in launch templates and the EBS CSI StorageClass.",
         savings_usd_month: $save, evidence: {volumes: [$g2[].VolumeId]}}),
 
+  # --- NAT gateways: idle ones, extras outside prd, heavy processing, S3 without a gateway endpoint -
+  ( ($in.nat.NatGateways // []) as $nats
+    | ($in.nat_metrics // [] | map({key: .id, value: .bytes}) | from_entries) as $bytes
+    | ($in.vpcs.Vpcs // [] | map({key: .VpcId, value: tagv($cfg; .Tags)}) | from_entries) as $vpc_env
+    | ($cfg.nat_hour * 730 | money) as $hourly_month
+    | (
+      ($nats[] | . as $n | ($bytes[$n.NatGatewayId] // null) as $b
+       | ($b // 0) / 1e9 * 30 / 14 as $gb_month
+       | env_of($cfg; $n.Tags; $vpc_env[$n.VpcId]; ($n | tag("Name")) // $n.NatGatewayId) as $e
+       | base("nat/\($n.NatGatewayId)"; null) as $b0
+       | (select($b != null and $b < 1e9)
+          | $b0 + {check: "compute.nat_idle", severity: "warning",
+              message: "NAT gateway \($n | tag("Name") // $n.NatGatewayId) in \($n.VpcId) processed \($b / 1e6 | floor) MB in 14 days but costs about $\($hourly_month | usd) a month just to exist",
+              fix: "If nothing in its private subnets needs the internet, delete it (and its route); if something does rarely, point that subnet at another zone's NAT gateway.",
+              savings_usd_month: $hourly_month}),
+         (select($gb_month * $cfg.nat_gb >= $cfg.nat_busy_usd)
+          | $b0 + {check: "compute.nat_processing", severity: "info",
+              message: "NAT gateway \($n | tag("Name") // $n.NatGatewayId) processes about \($gb_month | floor) GB a month, about $\($gb_month * $cfg.nat_gb | usd) in data charges on top of $\($hourly_month | usd) for the gateway",
+              fix: "Traffic to S3 and DynamoDB can skip it through free gateway endpoints, and ECR, CloudWatch, STS and Secrets Manager through interface endpoints. VPC Flow Logs show which destinations dominate.",
+              evidence: {gb_month: ($gb_month | floor)}})),
+      # Several NAT gateways in one non-prd VPC: one would do.
+      ($nats | group_by(.VpcId)[] | select(length > 1) | . as $g
+       | env_of($cfg; []; $vpc_env[$g[0].VpcId]; $g[0].VpcId) as $e
+       | select($e != null and (is_prd($cfg; $e) | not))
+       | base("nat/\($g[0].VpcId)"; null) + {check: "compute.nat_per_az_outside_prd", severity: "info",
+           message: "\($e) VPC \($g[0].VpcId) runs \($g | length) NAT gateways (one per zone); outside production one is usually enough",
+           fix: "Route every private subnet through one NAT gateway in \($e) (a zone outage only affects outbound internet there).",
+           savings_usd_month: ((($g | length) - 1) * $hourly_month | money)}),
+      # S3 through the NAT gateway instead of a free gateway endpoint.
+      ([($in.endpoints.VpcEndpoints // [])[] | select(.VpcEndpointType == "Gateway" and (.ServiceName | endswith(".s3"))) | .VpcId]) as $has_s3
+      | ($nats | map(.VpcId) | unique[] | select(. as $v | $has_s3 | index($v) | not))
+      | base("vpc/\(.)/s3-endpoint"; null) + {check: "compute.no_s3_endpoint", severity: "info",
+          message: "VPC \(.) has a NAT gateway but no S3 gateway endpoint, so S3 traffic from private subnets pays NAT data charges ($\($cfg.nat_gb | usd)/GB)",
+          fix: "Add an aws_vpc_endpoint for com.amazonaws.\($in.region).s3 (type Gateway, free) on the private route tables."}
+    )),
+
   # --- Elastic IPs ----------------------------------------------------------------------------
   ( $in.addresses.Addresses // [] | .[] | select(.AssociationId == null) | . as $a
     | base("eip/\($a.PublicIp)"; null) + {check: "compute.eip_idle", severity: "info",

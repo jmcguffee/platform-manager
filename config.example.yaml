@@ -88,6 +88,8 @@ cost:
   # snapshot_gb_month: 0.05
   # public_ipv4_month: 3.65
   # secret_month: 0.40
+  # nat_hour: 0.045      # per NAT gateway-hour
+  # nat_gb: 0.045        # per GB a NAT gateway processes
 
 # Datadog on-call, read through Pup (brew install datadog-labs/pack/pup; then pup auth login).
 # Remove this section to skip it.
