@@ -26,7 +26,10 @@ rules() {
 msg() { jq -r --arg c "$1" 'select(.check == $c) | .message' ; }
 
 @test "an account with nothing wrong is quiet in every area" {
-  for a in edge data identity compute; do [ -z "$(rules "$a" '{}')" ]; done
+  for a in edge data identity compute; do
+    got=$(rules "$a" '{}')   # must succeed, not just print nothing
+    [ -z "$got" ]
+  done
 }
 
 # --- edge -----------------------------------------------------------------------------------
@@ -55,7 +58,8 @@ msg() { jq -r --arg c "$1" 'select(.check == $c) | .message' ; }
     "Origins": {"Items": [{"DomainName": "assets.s3.us-east-2.amazonaws.com", "S3OriginConfig": {"OriginAccessIdentity": ""}, "OriginAccessControlId": ""}]}}]}}}')
   [ "$(checks <<<"$got")" = "edge.cf_allows_http edge.cf_no_waf edge.cf_old_tls edge.cf_s3_origin_public " ]
   # Account-wide checks run once, with the first region only.
-  [ -z "$(rules edge '{"first": false, "cf": {"DistributionList": {"Items": [{"Id": "E2", "WebACLId": "", "DefaultCacheBehavior": {}, "ViewerCertificate": {}, "Origins": {"Items": []}}]}}}')" ]
+  got=$(rules edge '{"first": false, "cf": {"DistributionList": {"Items": [{"Id": "E2", "WebACLId": "", "DefaultCacheBehavior": {}, "ViewerCertificate": {}, "Origins": {"Items": []}}]}}}')
+  [ -z "$got" ]
 }
 
 @test "edge: WAF rules left counting; a certificate stuck on DNS validation names the records to add" {

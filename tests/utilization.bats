@@ -34,8 +34,9 @@ rds() { jq -cn --arg id "$1" --arg class "$2" --arg engine "${3:-postgres}" --ar
 }
 
 @test "the smallest burstable size isn't called oversized" {
-  [ -z "$(assess "$(rds tiny db.t4g.micro)" '{"CPUUtilization/Average": 1, "CPUUtilization/Maximum": 3,
-    "DatabaseConnections/Maximum": 2, "CPUCreditBalance/Minimum": 100, "FreeableMemory/Minimum": 5e8, "FreeStorageSpace/Minimum": 6e10}')" ]
+  got=$(assess "$(rds tiny db.t4g.micro)" '{"CPUUtilization/Average": 1, "CPUUtilization/Maximum": 3,
+    "DatabaseConnections/Maximum": 2, "CPUCreditBalance/Minimum": 100, "FreeableMemory/Minimum": 5e8, "FreeStorageSpace/Minimum": 6e10}')
+  [ -z "$got" ]
 }
 
 @test "an idle database, a hot one, low storage and spent credits" {

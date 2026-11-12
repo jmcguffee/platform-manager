@@ -236,6 +236,17 @@ nowhere else, and report values are inserted as text, never as HTML.
 `pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
 with no network access at all.
 
+## App configuration
+
+`pmgr apps` (and the App config view) reads each Deployment, StatefulSet and DaemonSet outside system
+namespaces and flags privileged containers, hostPath mounts, containers that run (or may run) as
+root, `:latest` or untagged images, missing memory limits and readiness probes, and in prd: single
+replicas, no PodDisruptionBudget, and replicas that aren't asked to spread across nodes and zones.
+It also flags PDBs that allow no evictions even when every pod is healthy, since those make node
+drains, and so node group and Karpenter upgrades, hang. Environment comes from the namespace name,
+then the cluster name. `apps.system_namespaces` lists the namespaces to skip (node agents like the
+Datadog agent need privileges).
+
 ## Load balancing
 
 `pmgr lb` (and the Load balancing view) checks every TargetGroupBinding on each reachable

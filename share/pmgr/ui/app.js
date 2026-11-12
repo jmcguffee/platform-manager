@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "traffic", "lifecycle", "edge", "data", "identity", "compute", "utilization", "pipelines", "workflows", "argo", "sources"];
-const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], traffic: ["traffic"], lifecycle: ["lifecycle"], edge: ["edge"], data: ["data"], identity: ["identity"], compute: ["compute"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "apps", "traffic", "lifecycle", "edge", "data", "identity", "compute", "utilization", "pipelines", "workflows", "argo", "sources"];
+const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], apps: ["apps"], traffic: ["traffic"], lifecycle: ["lifecycle"], edge: ["edge"], data: ["data"], identity: ["identity"], compute: ["compute"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
@@ -909,6 +909,13 @@ function lifecycle() {
   });
 }
 
+function apps() {
+  return areaView("apps", {
+    bad: "Some apps are set up unsafely.", warn: "Some apps aren't set up to survive a node going away.", good: "Apps are set up well.",
+    sub: "Each Deployment, StatefulSet and DaemonSet outside system namespaces: privileged containers, hostPath mounts, root, :latest images, memory limits, readiness probes, and in prd single replicas, missing PDBs and unspread replicas. Also PDBs that block node drains, which stall node upgrades.",
+    empty: "No app configuration problems.", filter: "Filter by cluster, namespace or workload",
+    group: (f) => { const [cluster, ns] = f.resource.split("/"); return `${cluster} › ${ns}`; } });
+}
 function edge() {
   return areaView("edge", {
     bad: "Something at the edge is broken or exposed.", warn: "The edge has gaps.", good: "The edge is set up well.",
@@ -1181,12 +1188,12 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, oncall, access, security, workloads, traffic, lifecycle, edge, data, identity, compute, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, oncall, access, security, workloads, apps, traffic, lifecycle, edge, data, identity, compute, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 const NAV = [
   ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
-  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["traffic", "Load balancing"], ["lifecycle", "Lifecycle"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
+  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["apps", "App config"], ["traffic", "Load balancing"], ["lifecycle", "Lifecycle"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
   ["AWS posture", [["edge", "Edge & WAF"], ["data", "Data stores"], ["identity", "Identity & IAM"], ["compute", "Compute & EBS"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
   ["System", [["sources", "Sources"]]],

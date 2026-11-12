@@ -134,7 +134,8 @@ workloads: {ignore_namespaces: [sandbox], event_window_minutes: 30}'
     jq -n '{metadata: {namespace: "sandbox"}, involvedObject: {kind: "Pod", name: "b"}, reason: "FailedMount", message: "ignored",
       lastTimestamp: "2026-11-11T11:59:00Z"}'
   } | list events
-  [ -z "$(assess)" ]
+  got=$(assess)
+  [ -z "$got" ]
 }
 
 @test "the sweep reads every resource read-only and says what it couldn't read" {

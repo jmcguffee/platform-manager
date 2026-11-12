@@ -39,7 +39,8 @@ assess() {
   [[ "$(jq -r 'select(.check == "eks.support_ending") | .message' <<<"$got")" == *"ends 2027-01-02 (51 days). Its upgrade policy is STANDARD, so AWS upgrades it automatically then"* ]]
   [ "$(jq -r 'select(.check == "eks.support_ending") | .severity' <<<"$got")" = warning ]
   [[ "$(assess 1.34 EXTENDED | jq -r 'select(.check == "eks.support_ending") | .message')" == *"moves to extended support, about \$365/month more"* ]]
-  [ -z "$(assess 1.35 | jq -r 'select(.check)')" ]   # newest, far from the end: quiet
+  got=$(assess 1.35)   # newest, far from the end: quiet
+  [ -z "$(jq -r 'select(.check)' <<<"$got")" ]
 }
 
 @test "add-ons: health issues are errors; versions behind say by how much" {

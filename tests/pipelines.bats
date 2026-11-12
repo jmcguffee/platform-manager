@@ -37,7 +37,8 @@ assess() { pipelines_assess infra main "$1" "${2:-"{}"}" 14; }
 }
 
 @test "failures on feature branches don't break main" {
-  [ -z "$(assess "$(runs 0:success 1:failure:feature/x)")" ]
+  got=$(assess "$(runs 0:success 1:failure:feature/x)")
+  [ -z "$got" ]
 }
 
 @test "a failure rate needs enough runs, and only counts when main isn't broken now" {

@@ -102,7 +102,8 @@ PRD_LB='[{"LoadBalancerArn": "arn:lb/prd", "LoadBalancerName": "prd-public", "DN
 @test "S3 Block Public Access: any setting off is flagged" {
   got=$(assess "$(input "[]" "[]" "[]" '{"s3pab": {"PublicAccessBlockConfiguration": {"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": false, "RestrictPublicBuckets": true}}}')")
   [[ "$(jq -r 'select(has("check")) | .message' <<<"$got")" == *"BlockPublicPolicy off"* ]]
-  [ -z "$(assess "$(input "[]" "[]" "[]" '{"s3pab": {"PublicAccessBlockConfiguration": {"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true}}}')" | jq -r 'select(has("check"))')" ]
+  got=$(assess "$(input "[]" "[]" "[]" '{"s3pab": {"PublicAccessBlockConfiguration": {"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true}}}')")
+  [ -z "$(jq -r 'select(has("check"))' <<<"$got")" ]
 }
 
 @test "the account sweep uses only describe/list/get calls" {
