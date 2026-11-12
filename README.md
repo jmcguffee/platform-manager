@@ -273,6 +273,39 @@ health check settings, the Service and its endpoints, and the controller's recen
 It needs only the AWS session (no cluster access). Diagnose on an add-on or node group shows its
 full status, versions, and recent Auto Scaling activity.
 
+## AWS posture
+
+`pmgr posture` (and the four AWS posture views) reads how each account is set up, in every region
+it runs in, and judges it by environment:
+
+- **Edge & WAF**: internet-facing ALBs without a web ACL; ALBs behind CloudFront that are still open
+  to the world (so CloudFront's WAF can be skipped); WAF rules left in count mode, unattached ACLs,
+  no logging, no AWS managed rules; HTTP listeners that don't redirect, TLS 1.0/1.1 policies,
+  production load balancers without deletion protection or access logs; CloudFront without WAF,
+  serving plain HTTP, accepting old TLS, reading S3 without origin access control, or talking to
+  its ALB over HTTP; ACM certificates expired while in use, not renewing (with the exact DNS
+  validation records to add to the dns repo), or unused.
+- **Data stores**: public S3 buckets (AWS's own evaluation, plus ACLs), buckets that accept plain
+  HTTP, unversioned production buckets, buckets with no lifecycle rules; RDS and Aurora without
+  encryption, IAM auth, enough backups, Multi-AZ or deletion protection (in prd), on an expired CA,
+  or with an unmanaged master password; Redshift without encryption, `require_ssl`, audit logs,
+  enhanced VPC routing or snapshots; ElastiCache without TLS, encryption, AUTH, failover or backups;
+  secrets whose rotation is failing, and secrets nobody has read in 90 days.
+- **Identity & IAM**: GitHub Actions OIDC trust not pinned to a repository (any repo on GitHub could
+  assume it), pinned only to the org, or open to any branch; IRSA roles any service account can
+  assume; roles trusting anyone, or an account that isn't yours without an ExternalId; admin roles
+  and `iam:PassRole` on `*`; roles unused for 90 days; IAM users without MFA or with old keys; root
+  access keys or no root MFA; no logging CloudTrail; GuardDuty off; EBS not encrypted by default.
+- **Compute & EBS**: IMDSv1 (reported once per node group or ASG); unencrypted volumes; unattached
+  volumes, gp2 volumes and idle Elastic IPs with what they cost; old snapshots; previous-generation
+  instance types; instances stopped for over 30 days.
+
+Everything is a describe, list or get call; `ReadOnlyAccess` or `SecurityAudit` covers it. A call
+your role can't make is listed under "not checked", never treated as clean. Savings feed the
+Overview's total. Diagnose shows the resource as AWS sees it (for a secret, its metadata, never the
+value). Set `posture.ignore` for things that are deliberate, and `posture.trusted_accounts` for
+accounts outside your profiles that roles may trust.
+
 ## Regions
 
 Utilization and security check every region you run in, account by account. Unless you say

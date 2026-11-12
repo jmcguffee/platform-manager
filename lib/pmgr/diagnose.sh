@@ -131,7 +131,7 @@ diagnose_finding() { # DIAG_JSON
     incident)
       diag_section "Incident $(jq -r .id <<<"$d")" "$(cfg '.datadog.pup // "pup"')" incidents get "$(jq -r .id <<<"$d")" --read-only -o yaml
       ;;
-    rds | redshift | elasticache | msk | ec2 | eks) diag_aws "$d" ;;
+    rds | redshift | elasticache | msk | ec2 | eks | s3 | cloudfront | acm | secret | iam_role | iam_user | ebs) diag_aws "$d" ;;
     cluster) diag_cluster_access "$d" ;;
     eks_addon)
       diag_section "Add-on $(jq -r .addon <<<"$d")" aws eks describe-addon --cluster-name "$(jq -r .cluster <<<"$d")" --addon-name "$(jq -r .addon <<<"$d")" \
@@ -187,7 +187,7 @@ diagnose_finding() { # DIAG_JSON
 # AWS resources: the settings that matter, and the last day of AWS events for it.
 diag_aws() {
   local d=$1 type id p r
-  type=$(jq -r .type <<<"$d") id=$(jq -r '.id // .name' <<<"$d") p=$(jq -r .profile <<<"$d") r=$(jq -r .region <<<"$d")
+  type=$(jq -r .type <<<"$d") id=$(jq -r '.id // .name' <<<"$d") p=$(jq -r .profile <<<"$d") r=$(jq -r '.region // "us-east-1"' <<<"$d")
   case $type in
     rds)
       diag_section "RDS instance $id" aws rds describe-db-instances --db-instance-identifier "$id" --profile "$p" --region "$r" --output table \
@@ -209,7 +209,37 @@ diag_aws() {
         --query 'ClusterInfoList[].{State:State,Brokers:Provisioned.NumberOfBrokerNodes,Type:Provisioned.BrokerNodeGroupInfo.InstanceType,Storage:Provisioned.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.VolumeSize,Version:Provisioned.CurrentBrokerSoftwareInfo.KafkaVersion}' ;;
     ec2)
       diag_section "Instance $id" aws ec2 describe-instances --instance-ids "$id" --profile "$p" --region "$r" --output table \
-        --query 'Reservations[].Instances[].{Type:InstanceType,State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,Subnet:SubnetId,Groups:join(`, `,SecurityGroups[].GroupId)}' ;;
+        --query 'Reservations[].Instances[].{Type:InstanceType,State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,Subnet:SubnetId,Groups:join(`, `,SecurityGroups[].GroupId),IMDS:MetadataOptions.HttpTokens,HopLimit:MetadataOptions.HttpPutResponseHopLimit,Role:IamInstanceProfile.Arn}' ;;
+    ebs)
+      diag_section "Volume $id" aws ec2 describe-volumes --volume-ids "$id" --profile "$p" --region "$r" --output table \
+        --query 'Volumes[].{Size:Size,Type:VolumeType,State:State,Encrypted:Encrypted,Created:CreateTime,Zone:AvailabilityZone,Snapshot:SnapshotId,Tags:join(`, `,Tags[].join(`=`,[Key,Value]) || `[]`)}' ;;
+    s3)
+      diag_section "Is it public? (AWS's evaluation)" aws s3api get-bucket-policy-status --bucket "$id" --profile "$p" --region "$r" --output table
+      diag_section "Block Public Access for the bucket" aws s3api get-public-access-block --bucket "$id" --profile "$p" --region "$r" --output table
+      diag_section "Bucket policy" aws s3api get-bucket-policy --bucket "$id" --profile "$p" --region "$r" --query Policy --output text
+      diag_section "ACL grants" aws s3api get-bucket-acl --bucket "$id" --profile "$p" --region "$r" --output table \
+        --query 'Grants[].{Grantee:Grantee.URI || Grantee.DisplayName || Grantee.ID,Permission:Permission}'
+      diag_section "Versioning" aws s3api get-bucket-versioning --bucket "$id" --profile "$p" --region "$r" --output table
+      diag_section "Lifecycle rules" aws s3api get-bucket-lifecycle-configuration --bucket "$id" --profile "$p" --region "$r" --output yaml ;;
+    cloudfront)
+      diag_section "Distribution $id" aws cloudfront get-distribution --id "$id" --profile "$p" --output yaml \
+        --query 'Distribution.DistributionConfig.{Aliases:Aliases.Items,WebACL:WebACLId,Viewer:ViewerCertificate,Default:DefaultCacheBehavior.ViewerProtocolPolicy,Origins:Origins.Items[].{Domain:DomainName,OAC:OriginAccessControlId,Protocol:CustomOriginConfig.OriginProtocolPolicy},Logging:Logging}' ;;
+    acm)
+      diag_section "Certificate" aws acm describe-certificate --certificate-arn "$id" --profile "$p" --region "$r" --output yaml \
+        --query 'Certificate.{Domain:DomainName,Names:SubjectAlternativeNames,Status:Status,Type:Type,NotAfter:NotAfter,Renewal:RenewalSummary,Eligible:RenewalEligibility,InUseBy:InUseBy,Validation:DomainValidationOptions[].{Domain:DomainName,Status:ValidationStatus,Record:ResourceRecord}}' ;;
+    secret)
+      diag_section "Secret (metadata only, never the value)" aws secretsmanager describe-secret --secret-id "$id" --profile "$p" --region "$r" --output yaml \
+        --query '{Name:Name,Rotation:RotationEnabled,Rules:RotationRules,Lambda:RotationLambdaARN,LastRotated:LastRotatedDate,NextRotation:NextRotationDate,LastAccessed:LastAccessedDate,Versions:VersionIdsToStages}' ;;
+    iam_role)
+      diag_section "Role $id" aws iam get-role --role-name "$id" --profile "$p" --output yaml \
+        --query 'Role.{Arn:Arn,Created:CreateDate,LastUsed:RoleLastUsed,MaxSession:MaxSessionDuration,Trust:AssumeRolePolicyDocument}'
+      diag_section "Attached policies" aws iam list-attached-role-policies --role-name "$id" --profile "$p" --output table
+      diag_section "Inline policies" aws iam list-role-policies --role-name "$id" --profile "$p" --output table ;;
+    iam_user)
+      diag_section "Access keys" aws iam list-access-keys --user-name "$id" --profile "$p" --output table
+      diag_section "MFA devices" aws iam list-mfa-devices --user-name "$id" --profile "$p" --output table
+      diag_section "Groups" aws iam list-groups-for-user --user-name "$id" --profile "$p" --output table --query 'Groups[].GroupName'
+      diag_section "Attached policies" aws iam list-attached-user-policies --user-name "$id" --profile "$p" --output table ;;
     eks)
       diag_section "EKS cluster $id" aws eks describe-cluster --name "$id" --profile "$p" --region "$r" --output table \
         --query 'cluster.{Status:status,Version:version,PublicEndpoint:resourcesVpcConfig.endpointPublicAccess,PrivateEndpoint:resourcesVpcConfig.endpointPrivateAccess,PublicCIDRs:join(`, `,resourcesVpcConfig.publicAccessCidrs || `[]`),Endpoint:endpoint}' ;;

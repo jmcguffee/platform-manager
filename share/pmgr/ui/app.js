@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "traffic", "lifecycle", "utilization", "pipelines", "workflows", "argo", "sources"];
-const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], traffic: ["traffic"], lifecycle: ["lifecycle"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "traffic", "lifecycle", "edge", "data", "identity", "compute", "utilization", "pipelines", "workflows", "argo", "sources"];
+const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], traffic: ["traffic"], lifecycle: ["lifecycle"], edge: ["edge"], data: ["data"], identity: ["identity"], compute: ["compute"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
@@ -909,6 +909,32 @@ function lifecycle() {
   });
 }
 
+function edge() {
+  return areaView("edge", {
+    bad: "Something at the edge is broken or exposed.", warn: "The edge has gaps.", good: "The edge is set up well.",
+    sub: "WAF on CloudFront and internet-facing ALBs (and whether CloudFront's WAF can be skipped), CloudFront TLS and origins, load balancer listeners and settings, and ACM certificates: expired, not renewing (with the DNS records to add), or unused.",
+    empty: "No WAF, CloudFront, load balancer or certificate problems.", filter: "Filter by account, load balancer, distribution or domain" });
+}
+function data() {
+  return areaView("data", {
+    bad: "A data store needs fixing.", warn: "Data stores have gaps.", good: "Data stores are set up well.",
+    sub: "S3 (public, plain HTTP, versioning, lifecycle), RDS and Aurora (encryption, IAM auth, backups, Multi-AZ, deletion protection, CA certificates, managed passwords), Redshift (encryption, require_ssl, audit logs, VPC routing), ElastiCache (TLS, encryption, AUTH, failover) and Secrets Manager (rotation that isn't happening, secrets nobody reads).",
+    empty: "No data store problems.", filter: "Filter by account, bucket, database or secret" });
+}
+function identity() {
+  return areaView("identity", {
+    bad: "Someone can become something they shouldn't.", warn: "IAM has gaps.", good: "IAM is tight.",
+    sub: "Trust policies (GitHub OIDC not pinned to a repo, IRSA wildcards, unknown accounts without an ExternalId, anyone), admin and PassRole-on-* roles, unused roles, IAM users (old keys, no MFA), the root user, and the account baseline: CloudTrail, GuardDuty, EBS encryption by default.",
+    empty: "No IAM or baseline problems.", filter: "Filter by account, role or user",
+    group: (f) => f.resource.split("/").slice(0, 2).join(" › ").replace(/›\s(role|user)$/, (m, k) => `› ${k === "role" ? "roles" : "users"}`) });
+}
+function compute() {
+  return areaView("compute", {
+    bad: "Compute needs fixing.", warn: "Compute has gaps.", good: "Compute is set up well.",
+    sub: "Instance metadata (IMDSv1 lets an SSRF bug steal the instance role), unencrypted EBS, unattached volumes, gp2 that should be gp3, idle Elastic IPs, old snapshots, previous-generation instances and long-stopped ones, with what each costs.",
+    empty: "No EC2 or EBS problems.", filter: "Filter by account, node group, volume or instance" });
+}
+
 // ---------- load balancing ----------
 const TGB_STATE = { ok: ["ok", "healthy"], unhealthy: ["bad", "unhealthy"], empty: ["bad", "no targets"], detached: ["bad", "no load balancer"], missing: ["bad", "target group missing"] };
 function traffic() {
@@ -1155,12 +1181,13 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, oncall, access, security, workloads, traffic, lifecycle, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, oncall, access, security, workloads, traffic, lifecycle, edge, data, identity, compute, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 const NAV = [
   ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
   ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["traffic", "Load balancing"], ["lifecycle", "Lifecycle"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
+  ["AWS posture", [["edge", "Edge & WAF"], ["data", "Data stores"], ["identity", "Identity & IAM"], ["compute", "Compute & EBS"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
   ["System", [["sources", "Sources"]]],
 ];

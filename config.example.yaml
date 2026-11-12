@@ -67,9 +67,26 @@ security:
   account_environments: {}              # per profile, when resources aren't tagged, e.g. {prod-platform: prd}
   allowed_public: []                    # deliberate exceptions: security group IDs, LB names, resource IDs
 
+# AWS posture (pmgr posture): edge, data stores, IAM and compute. Uses the security section's
+# environment tag and prd list, so "production only" rules apply where they should.
+posture:
+  trusted_accounts: []      # account IDs outside your profiles that roles may trust (vendors, the org's management account)
+  ignore: []                # names or IDs to skip on purpose (a public website bucket, a vendor role)
+  unused_days: 90           # roles, secrets and access keys unused this long are reported
+  access_key_max_days: 90
+  cert_warn_days: 30        # ACM certificates that won't renew: a warning at twice this, an error inside it
+  snapshot_old_days: 365
+
 cost:
   # GitHub Actions rate for private repos, used to estimate CI cost (Linux 2-core list price).
   actions_usd_per_minute: 0.008
+  # List prices for savings estimates (us-east-1). Override with your region's or your discount.
+  # eks_standard_usd_hour: 0.10
+  # eks_extended_usd_hour: 0.60
+  # ebs_gb_month: {gp2: 0.10, gp3: 0.08}
+  # snapshot_gb_month: 0.05
+  # public_ipv4_month: 3.65
+  # secret_month: 0.40
 
 # Datadog on-call, read through Pup (brew install datadog-labs/pack/pup; then pup auth login).
 # Remove this section to skip it.
