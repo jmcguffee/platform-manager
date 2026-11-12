@@ -172,7 +172,7 @@ serve_ui() {
     esac
     shift
   done
-  SERVE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/live"
+  SERVE_DIR="$(pmgr_cache)/live"
   mkdir -p "$SERVE_DIR" && chmod 700 "$SERVE_DIR"
   port=$(serve_port "${port:-8765}") || die "No free port from 8765 to 8785. Pass --port."
   SERVE_TOKEN=$(serve_token)

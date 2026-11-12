@@ -11,7 +11,7 @@
 # Login: argocd_secret names a Secrets Manager secret (plain text, or JSON with a password key).
 # The password goes to the clipboard and nowhere else: not stdout, the report, the logs or the browser.
 
-pf_dir() { printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/pf"; }
+pf_dir() { printf '%s' "$(pmgr_cache)/pf"; }
 
 # A cluster's stable local port: argocd_port from config, else 8080 + its position in the config.
 pf_port() {

@@ -65,7 +65,32 @@ err() { cat "$PMGR_TMP/$1.err" 2>/dev/null; }
 
 # --- config ---------------------------------------------------------------
 
-config_path() { printf '%s' "${PMGR_CONFIG:-$HOME/.config/platform-manager/config.yaml}"; }
+# --- workspaces ------------------------------------------------------------
+# One per contract: its own config, history, last report, tunnels and watch. Chosen by -w NAME, then
+# $PMGR_WORKSPACE, then `pmgr workspace use NAME`; none means the default (config.yaml, as before).
+PMGR_CONFIG_DIR="$HOME/.config/platform-manager"
+
+pmgr_workspace() {
+  local ws=${PMGR_WORKSPACE:-}
+  [ -n "$ws" ] || ws=$(cat "$PMGR_CONFIG_DIR/current-workspace" 2>/dev/null)
+  [ "$ws" = default ] && ws=""
+  case $ws in *[!a-z0-9_-]*) die "Workspace names use lowercase letters, digits, - and _ ('$ws' doesn't)" ;; esac
+  printf '%s' "$ws"
+}
+
+# pmgr_cache : this workspace's cache directory (history, last report, tunnels, watch state).
+pmgr_cache() {
+  local ws base="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager"
+  ws=$(pmgr_workspace)
+  if [ -n "$ws" ]; then printf '%s/workspaces/%s' "$base" "$ws"; else printf '%s' "$base"; fi
+}
+
+config_path() {
+  local ws
+  if [ -n "${PMGR_CONFIG:-}" ]; then printf '%s' "$PMGR_CONFIG"; return; fi
+  ws=$(pmgr_workspace)
+  if [ -n "$ws" ]; then printf '%s/workspaces/%s.yaml' "$PMGR_CONFIG_DIR" "$ws"; else printf '%s/config.yaml' "$PMGR_CONFIG_DIR"; fi
+}
 
 # Load the YAML config once as JSON into $PMGR_CONFIG_JSON and validate it.
 config_load() {

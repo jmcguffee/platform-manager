@@ -112,3 +112,9 @@ github:
     - {name: platform-infra, kind: terraform}   # e.g. path: ~/src/platform-infra
     - {name: platform-apps, kind: gitops}
     - {name: dns, kind: terraform}
+
+# Background checks (pmgr watch on): notifications for new errors and expired sessions.
+watch:
+  every_minutes: 60
+  hours: 8-18          # local time; nothing runs outside it
+  weekends: false

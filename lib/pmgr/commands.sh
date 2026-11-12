@@ -28,6 +28,13 @@ Health
   diagnose NAME           Logs, events and describe output for a finding (matches its resource or message)
   changes                 What's new, fixed, or not checked since the run before the last one
   weekly [--days N]       A Markdown status update: fixed, new, still open, savings (from run history)
+  watch on|off|status     Check in the background (macOS) and notify when something new breaks
+
+Workspaces (one per contract: its own config, history, tunnels and watch)
+  workspace [list]        List them; * marks the one in use
+  workspace new NAME      Create one (asks nothing; add --from-kubeconfig to fill in clusters)
+  workspace use NAME      Make it the default (use "default" for config.yaml)
+  -w NAME <command>       Use a workspace for one command: pmgr -w acme doctor
 
 Argo CD
   pf argo CLUSTER|--all   Port-forward to Argo CD on a stable local port and open it
@@ -119,7 +126,8 @@ emit() {
 
 # Keep the latest report so `pmgr diagnose` can find its findings.
 save_last_report() {
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager"
+  local dir
+  dir=$(pmgr_cache)
   mkdir -p "$dir" && chmod 700 "$dir"
   (umask 077 && printf '%s\n' "$1" >"$dir/last-report.json.tmp" && mv "$dir/last-report.json.tmp" "$dir/last-report.json")
 }
@@ -269,7 +277,8 @@ cmd_ui() {
   esac
   local no_open=0
   case " $* " in *" --no-open "*) no_open=1 ;; esac
-  local dir="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager" file
+  local dir file
+  dir=$(pmgr_cache)
   mkdir -p "$dir" && chmod 700 "$dir"
   file="$dir/dashboard.html"
   printf 'Checking your platform...\n' >&2
@@ -332,6 +341,11 @@ discover_clusters() {
 }
 
 main() {
+  # -w NAME / --workspace NAME picks the contract's workspace for this run.
+  case ${1:-} in
+    -w | --workspace) PMGR_WORKSPACE=${2:?-w needs a workspace name}; export PMGR_WORKSPACE; shift 2 ;;
+    --workspace=*) PMGR_WORKSPACE=${1#*=}; export PMGR_WORKSPACE; shift ;;
+  esac
   [ $# -gt 0 ] || { usage; exit 0; }
   local cmd=$1
   shift
@@ -343,6 +357,7 @@ main() {
   need yq yq
   pmgr_tmp_init
   [ "$cmd" = init ] && { cmd_init "$@"; exit $?; }
+  [ "$cmd" = workspace ] && { cmd_workspace "$@"; exit $?; }
   # internal: answer one HTTP request for the ui server (stdin: request, stdout: response)
   [ "$cmd" = __handle ] && { serve_handle; exit 0; }
   config_load
@@ -368,8 +383,10 @@ main() {
       if [ -n "$wout" ]; then weekly_report "$wdays" >"$wout" && printf 'Wrote %s\n' "$wout" >&2; else weekly_report "$wdays"; fi
       ;;
     __weekly) weekly_report "${1:-7}" ;;
+    watch) cmd_watch "$@" ;;
+    __scheduled) cmd_scheduled ;;
     changes)
-      f="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/last-report.json"
+      f="$(pmgr_cache)/last-report.json"
       [ -f "$f" ] || die "No report yet. Run pmgr doctor or pmgr ui first."
       changes_text "$(cat "$f")"
       ;;
@@ -401,5 +418,37 @@ main() {
       [ -z "${2:-}" ] || printf '%s\n' "$report" >"$2"
       ;;
     *) printf 'pmgr: unknown command %s\n\n' "$cmd" >&2; usage >&2; exit 2 ;;
+  esac
+}
+
+cmd_workspace() {
+  local sub=${1:-list} name cur f
+  [ $# -gt 0 ] && shift
+  case $sub in
+    list)
+      cur=$(pmgr_workspace)
+      printf '%s default  %s\n' "$([ -z "$cur" ] && echo '*' || echo ' ')" "$PMGR_CONFIG_DIR/config.yaml"
+      for f in "$PMGR_CONFIG_DIR"/workspaces/*.yaml; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f" .yaml)
+        printf '%s %s  %s\n' "$([ "$name" = "$cur" ] && echo '*' || echo ' ')" "$name" "$f"
+      done
+      ;;
+    new)
+      name=${1:?Usage: pmgr workspace new NAME [--from-kubeconfig]}
+      shift
+      case $name in default | *[!a-z0-9_-]*) die "Use lowercase letters, digits, - and _ for a workspace name (not 'default')" ;; esac
+      mkdir -p "$PMGR_CONFIG_DIR/workspaces" && chmod 700 "$PMGR_CONFIG_DIR/workspaces"
+      PMGR_WORKSPACE=$name cmd_init "$@" || return $?
+      printf 'Workspace %s is ready. Use it with: pmgr -w %s doctor   (or make it the default: pmgr workspace use %s)\n' "$name" "$name" "$name"
+      ;;
+    use)
+      name=${1:?Usage: pmgr workspace use NAME}
+      if [ "$name" != default ] && [ ! -f "$PMGR_CONFIG_DIR/workspaces/$name.yaml" ]; then die "No workspace $name. Create it with: pmgr workspace new $name"; fi
+      mkdir -p "$PMGR_CONFIG_DIR"
+      printf '%s\n' "$name" >"$PMGR_CONFIG_DIR/current-workspace"
+      printf 'Using workspace %s.\n' "$name"
+      ;;
+    *) die "Usage: pmgr workspace [list | new NAME | use NAME]" ;;
   esac
 }

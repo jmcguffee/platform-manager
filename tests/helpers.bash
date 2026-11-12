@@ -14,7 +14,7 @@ setup_pmgr() {
   export PMGR_CONFIG="$BATS_TEST_TMPDIR/config.yaml"
   export XDG_CACHE_HOME="$BATS_TEST_TMPDIR/cache"
   unset NO_COLOR
-  for lib in core auth clusters github runfailure pipelines workflows argo workloads pricing utilization oncall security traffic lifecycle posture apps history code diagnose portforward report serve commands; do
+  for lib in core auth clusters github runfailure pipelines workflows argo workloads pricing utilization oncall security traffic lifecycle posture apps history code watch diagnose portforward report serve commands; do
     # shellcheck source=/dev/null
     . "$PMGR_ROOT/lib/pmgr/$lib.sh"
   done

@@ -6,7 +6,7 @@
 
 HISTORY_KEEP=90
 
-history_dir() { printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/history"; }
+history_dir() { printf '%s' "$(pmgr_cache)/history"; }
 
 # The finding areas each sweep area produces, so runs of different scope compare fairly.
 HISTORY_AREAS='{"access": ["auth", "cluster"], "security": ["security"], "posture": ["edge", "data", "identity", "compute"],
@@ -84,7 +84,7 @@ changes_text() {
 weekly_report() {
   local days=${1:-7} latest dir
   dir=$(history_dir)
-  latest="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/last-report.json"
+  latest="$(pmgr_cache)/last-report.json"
   [ -f "$latest" ] || die "No report yet. Run pmgr doctor or pmgr ui first."
   # shellcheck disable=SC2086  # the glob is meant to expand
   cat "$dir"/*.json 2>/dev/null | jq -rs --slurpfile latest "$latest" --argjson days "$days" \

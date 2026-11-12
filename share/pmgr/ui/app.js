@@ -1301,7 +1301,9 @@ function render() {
   const view = currentView();
   renderNav(view);
   document.getElementById("title").textContent = TITLES[view] || "Overview";
-  document.title = `${TITLES[view] || "Overview"} · pmgr`;
+  const ws = app.report && app.report.workspace;
+  document.title = `${TITLES[view] || "Overview"} · pmgr${ws ? ` · ${ws}` : ""}`;
+  document.getElementById("workspace").textContent = ws ? ` ${ws}` : "";
   renderChecked();
   const main = document.getElementById("main");
   if (!app.report) {

@@ -238,6 +238,35 @@ nowhere else, and report values are inserted as text, never as HTML.
 `pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
 with no network access at all.
 
+## Watch in the background
+
+`pmgr watch on` installs a LaunchAgent (in `~/Library/LaunchAgents`, nothing system-wide) that runs
+every check on a schedule, keeps each run in history (so the weekly report fills itself in), and sends
+a macOS notification only when something new breaks at error level or worse, or your AWS sessions
+run out; each problem is announced once. `pmgr watch status` shows the last runs, `pmgr watch off`
+removes it. Configure it under `watch`:
+
+```yaml
+watch:
+  every_minutes: 60   # at least 15
+  hours: 8-18         # local time, 24-hour clock
+  weekends: false
+```
+
+## Workspaces (one per contract)
+
+Each workspace has its own config, history, last report, tunnels and watch, so one client's
+findings never mix into another's weekly report:
+
+```bash
+pmgr workspace new acme --from-kubeconfig   # ~/.config/platform-manager/workspaces/acme.yaml
+pmgr -w acme doctor                         # one command in that workspace
+pmgr workspace use acme                     # or make it the default
+pmgr workspace                              # list; * marks the one in use
+```
+
+Without a workspace, pmgr uses `config.yaml` and the cache exactly as before.
+
 ## Where to fix it
 
 Findings link to the line that defines the resource in your own repos: "Defined in

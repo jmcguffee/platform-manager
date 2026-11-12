@@ -305,7 +305,7 @@ diag_run() {
 # diagnose one. With several matches, list them so you can be more specific.
 cmd_diagnose() {
   local term=${1:-} report matches n
-  report="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/last-report.json"
+  report="$(pmgr_cache)/last-report.json"
   [ -n "$term" ] || die "Usage: pmgr diagnose NAME   (part of a finding's resource, e.g. checkout or sg-0abc)"
   [ -f "$report" ] || die "No report yet. Run pmgr doctor or pmgr ui first."
   matches=$(jq -c --arg t "$(lower "$term")" '[.findings[] | select(.diag != null)

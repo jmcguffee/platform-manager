@@ -16,11 +16,12 @@ report_build() {
   metrics=$(cat "$PMGR_TMP/metrics.jsonl" 2>/dev/null | jq -cs .)
   jq -n --argjson findings "$findings" --argjson usage "$usage" --argjson unseen "${unseen:-[]}" \
     --argjson sources "${sources:-[]}" --argjson metrics "${metrics:-[]}" \
-    --argjson config "$PMGR_CONFIG_JSON" --arg pim "$(pim_url)" --arg areas "${PMGR_AREAS:-}" \
+    --argjson config "$PMGR_CONFIG_JSON" --arg pim "$(pim_url)" --arg areas "${PMGR_AREAS:-}" --arg workspace "$(pmgr_workspace)" \
     --slurpfile clusters "$PMGR_TMP/clusters.json" --slurpfile accounts "$PMGR_TMP/accounts.json" '
     {
       generated_at: (now | todateiso8601),
       areas: ($areas | split(" ") | map(select(. != ""))),
+      workspace: $workspace,
       settings: {
         lookback_days: ($config.github.lookback_days // 14),
         utilization_days: ($config.utilization.lookback_days // 14),
