@@ -236,6 +236,26 @@ nowhere else, and report values are inserted as text, never as HTML.
 `pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
 with no network access at all.
 
+## Load balancing
+
+`pmgr lb` (and the Load balancing view) checks every TargetGroupBinding on each reachable
+cluster against the target groups in that cluster's account and region:
+
+- the target group it names exists, and if not, the closest name that does ("did you mean
+  prd-api-tg?"), since the binding and Terraform have to agree exactly
+- a load balancer forwards to it (a listener or rule in Terraform)
+- its Service and port exist, and the Service has ready pods
+- the binding's `targetType` matches the target group's
+- AWS says the targets are healthy, and when they aren't, AWS's reason (`Target.Timeout`,
+  `Target.ResponseCodeMismatch`, …) with what usually fixes it
+- the controller has applied the latest change, and no target group is bound twice (across
+  clusters too) without `multiClusterTargetGroup`
+
+Diagnose on a binding shows its description and events, each target's health, the target group's
+health check settings, the Service and its endpoints, and the controller's recent logs. It needs
+`get`/`list` on `targetgroupbindings.elbv2.k8s.aws`, services and endpointslices, and
+`elasticloadbalancing:DescribeTargetGroups` and `DescribeTargetHealth`.
+
 ## Regions
 
 Utilization and security check every region you run in, account by account. Unless you say

@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "utilization", "pipelines", "workflows", "argo", "sources"];
-const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "traffic", "utilization", "pipelines", "workflows", "argo", "sources"];
+const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], traffic: ["traffic"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
@@ -868,6 +868,41 @@ function access() {
   ];
 }
 
+// ---------- load balancing ----------
+const TGB_STATE = { ok: ["ok", "healthy"], unhealthy: ["bad", "unhealthy"], empty: ["bad", "no targets"], detached: ["bad", "no load balancer"], missing: ["bad", "target group missing"] };
+function traffic() {
+  const all = inView("traffic");
+  const rows = metrics("tgb");
+  const container = h("div");
+  const draw = () => {
+    const list = all.filter(passes);
+    container.replaceChildren(...(list.length
+      ? grouped(list, (f) => f.resource.split("/").slice(0, 2).join(" › "), () => true)
+      : [h("p", { class: "empty" }, all.length ? "No findings match these filters." : rows.length ? "Every binding's target group exists, is attached and has healthy targets." : "No TargetGroupBindings were read.")]));
+  };
+  draw();
+  const bad = rows.filter((r) => r.state !== "ok").length;
+  return [
+    h("h2", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, hasErrors(all) ? "Some traffic isn't reaching its pods." : rows.length ? "Load balancer targets are healthy." : "No TargetGroupBindings."),
+    h("p", { class: "verdict-sub" }, "Each TargetGroupBinding checked against the target group Terraform made: it exists (or which name is close), a load balancer forwards to it, the Service and port exist with ready pods, the target types match, and AWS says the targets are healthy."),
+    filters(draw, "Filter by cluster, namespace, binding or target group"),
+    container,
+    rows.length ? [
+      h("h2", {}, "Bindings", h("span", { class: "tally" }, bad ? ` ${bad} of ${rows.length} need attention` : ` ${rows.length}`)),
+      table([["Binding"], ["Cluster"], ["Service"], ["Target group"], ["Load balancer"], ["Healthy", true], ["State"]],
+        rows.map((r) => h("tr", { class: r.state === "ok" ? "" : "row-bad" },
+          h("td", {}, h("b", {}, r.name), h("div", { class: "muted small" }, r.ns)),
+          h("td", {}, r.cluster, h("div", { class: "muted small" }, r.region)),
+          h("td", {}, r.service),
+          h("td", {}, r.target_group, r.multi ? h("div", { class: "muted small" }, "multi-cluster") : null),
+          h("td", {}, r.load_balancers.length ? r.load_balancers.join(", ") : h("span", { class: "muted" }, "none")),
+          h("td", { class: `n ${r.targets && r.healthy < r.targets ? "bad" : ""}` }, r.targets ? `${r.healthy} / ${r.targets}` : "–"),
+          h("td", {}, h("span", { class: `chip-s ${(TGB_STATE[r.state] || ["off"])[0]}` }, (TGB_STATE[r.state] || ["", r.state])[1]))))),
+    ] : null,
+    unseenNote(),
+  ];
+}
+
 function workloads() {
   const reachable = (app.report.clusters || []).filter((c) => c.kubernetes === "ok");
   if (!reachable.length) {
@@ -1079,12 +1114,12 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, oncall, access, security, workloads, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, oncall, access, security, workloads, traffic, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 const NAV = [
   ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
-  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
+  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["traffic", "Load balancing"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
   ["System", [["sources", "Sources"]]],
 ];
@@ -1150,7 +1185,8 @@ function render() {
 function searchIndex() {
   const items = [];
   const areaView = Object.fromEntries(Object.entries(AREAS).flatMap(([v, areas]) => areas.map((a) => [a, v])));
-  for (const x of sources()) items.push({ kind: { repo: "Repo", cluster: "Cluster", account: "AWS account", datadog: "Datadog" }[x.type] || x.type, label: `${x.name}  ${x.detail}`, view: x.type === "repo" ? "pipelines" : x.type === "datadog" ? "oncall" : "access", q: x.name });
+  for (const x of sources()) items.push({ kind: { repo: "Repo", cluster: "Cluster", account: "AWS account", datadog: "Datadog", tgb: "Load balancing" }[x.type] || x.type, label: `${x.name}  ${x.detail}`, view: x.type === "repo" ? "pipelines" : x.type === "datadog" ? "oncall" : x.type === "tgb" ? "traffic" : "access", q: x.name });
+  for (const b of metrics("tgb")) items.push({ kind: "Binding", label: `${b.cluster} › ${b.ns}/${b.name}  ${b.target_group}`, view: "traffic", q: b.name });
   for (const w of metrics("workflow")) items.push({ kind: "Workflow", label: `${w.repo} › ${w.workflow}`, view: "pipelines", q: w.repo });
   for (const k of ["rds", "elasticache", "redshift", "msk", "eks"]) for (const m of metrics(k)) items.push({ kind: SERVICE[k], label: `${m.name}  ${m.class || m.version || ""}`, view: "utilization", q: m.name });
   for (const sch of new Set(metrics("shift").map((x) => x.schedule))) items.push({ kind: "Schedule", label: sch, view: "oncall", q: "" });

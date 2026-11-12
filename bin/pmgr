@@ -13,7 +13,7 @@ done
 PMGR_ROOT=$(cd -P "$(dirname "$src")/.." && pwd)
 export PMGR_ROOT
 
-for lib in core auth clusters github runfailure pipelines workflows argo workloads pricing utilization oncall security diagnose portforward report serve commands; do
+for lib in core auth clusters github runfailure pipelines workflows argo workloads pricing utilization oncall security traffic diagnose portforward report serve commands; do
   # shellcheck source=/dev/null
   . "$PMGR_ROOT/lib/pmgr/$lib.sh"
 done

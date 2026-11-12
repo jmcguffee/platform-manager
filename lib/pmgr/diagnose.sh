@@ -66,7 +66,7 @@ diagnose_finding() { # DIAG_JSON
   local d=$1 type c
   type=$(jq -r '.type // ""' <<<"$d")
   case $type in
-    pod | workload | node | object | argo | capacity)
+    pod | workload | node | object | argo | capacity | tgb)
       c=$(diag_cluster "$(jq -r .cluster <<<"$d")")
       [ -n "$c" ] || { jq -cn '{title: "Cluster", command: "", output: "This cluster is no longer in your config.", ok: false}'; return 0; }
       ;;
@@ -133,6 +133,22 @@ diagnose_finding() { # DIAG_JSON
       ;;
     rds | redshift | elasticache | msk | ec2 | eks) diag_aws "$d" ;;
     cluster) diag_cluster_access "$d" ;;
+    tgb)
+      local p r arn svc
+      p=$(jq -r .profile <<<"$d") r=$(jq -r .region <<<"$d") arn=$(jq -r '.tg_arn // ""' <<<"$d") svc=$(jq -r '.svc // ""' <<<"$d")
+      diag_section "Binding $name (with its events)" diag_k8s "$c" describe "$TGB_RESOURCE" "$name" -n "$ns"
+      if [ -n "$arn" ]; then
+        diag_section "Target health" aws elbv2 describe-target-health --target-group-arn "$arn" --profile "$p" --region "$r" --output table \
+          --query 'TargetHealthDescriptions[].{Target:Target.Id,Port:Target.Port,Zone:Target.AvailabilityZone,State:TargetHealth.State,Reason:TargetHealth.Reason,Description:TargetHealth.Description}'
+        diag_section "Target group settings" aws elbv2 describe-target-groups --target-group-arns "$arn" --profile "$p" --region "$r" --output table \
+          --query 'TargetGroups[].{Name:TargetGroupName,Type:TargetType,Protocol:Protocol,Port:Port,HealthPath:HealthCheckPath,HealthPort:HealthCheckPort,Matcher:Matcher.HttpCode,Healthy:HealthyThresholdCount,Unhealthy:UnhealthyThresholdCount,LoadBalancers:join(`, `,LoadBalancerArns)}'
+      fi
+      if [ -n "$svc" ]; then
+        diag_section "Service $svc" diag_k8s "$c" get service "$svc" -n "$ns" -o wide
+        diag_section "Endpoints of $svc" diag_k8s "$c" get endpointslices.discovery.k8s.io -n "$ns" -l "kubernetes.io/service-name=$svc" -o wide
+      fi
+      diag_section "Load balancer controller logs (last 40 lines)" diag_k8s "$c" logs -n kube-system deployment/aws-load-balancer-controller --tail=40
+      ;;
     capacity)
       diag_section "Node usage right now" diag_k8s "$c" top nodes
       diag_section "Nodes" diag_k8s "$c" get nodes -o wide -L node.kubernetes.io/instance-type,karpenter.sh/capacity-type,eks.amazonaws.com/capacityType
