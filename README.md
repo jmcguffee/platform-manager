@@ -199,6 +199,15 @@ Each environment opens on its own name, like `https://dev.localhost:8080` and
 every Argo CD would share one login cookie and signing in to one environment would sign you out of
 the others. `*.localhost` always means this machine; nothing to add to `/etc/hosts`.
 
+A tunnel only counts as up once Argo CD answers a request through it, so the scheme is whatever
+Argo CD actually speaks (http when it runs with `server.insecure`, even behind a port named
+https). If it doesn't answer, you get the reason: your role can't port-forward, no pod behind the
+service, or the wrong port. **Check** (or `pmgr pf check dev`) shows each step: the process and its
+log, a request over https and http, `auth can-i create pods/portforward`, the service, endpoints and
+pods, what `dev.localhost` resolves to, and your proxy settings. If the request through the tunnel
+works but the browser still can't connect, a proxy is taking `dev.localhost`: use the
+`127.0.0.1` link under the button, or add `*.localhost` to the proxy's bypass list.
+
 Ports: `argocd_port` fixes one. Otherwise pmgr reuses the port it used last time, else 8080, 8081, …
 in config order, and if that one is taken, a free port the OS picks.
 

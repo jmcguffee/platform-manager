@@ -21,11 +21,19 @@ case " $* " in
     esac ;;
   *" port-forward "*)
     port=$(printf '%s\n' "$@" | grep -E '^[0-9]+:[0-9]+$' | cut -d: -f1)
-    exec perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $ARGV[0], Listen => 5, ReuseAddr => 1) or die; while (my $c = $s->accept) { close $c }' "$port" port-forward ;;
+    # Like Argo CD with server.insecure: plain http; a TLS hello is dropped. FAKE_PF=silent answers
+    # nothing (the pod can't be reached), FAKE_PF=forbidden also logs what kubectl would say.
+    [ "${FAKE_PF:-}" = forbidden ] && echo 'E1112 portforward.go:413] error upgrading connection: pods "argocd-server-abc" is forbidden: User cannot create resource "pods/portforward"' >&2
+    exec perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $ARGV[0], Listen => 5, ReuseAddr => 1) or die;
+      while (my $c = $s->accept) { sysread($c, my $b, 4096); if ($ENV{FAKE_PF} || substr($b, 0, 1) eq "\x16") { close $c; next }
+        print $c "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"; close $c }' "$port" port-forward ;;
+  *" auth can-i "*) echo no; exit 1 ;;
+  *" get svc/"*) echo "NAME            TYPE        PORT(S)" ;;
+  *" get pods "*) echo "NAME                READY   STATUS" ;;
 esac
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/kubectl"
-  export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
+  export PATH="$BATS_TEST_TMPDIR/bin:$PATH" PF_PROBE_SECONDS=2
 }
 
 teardown() {
@@ -40,15 +48,16 @@ teardown() {
   [ -z "$(pf_port nope)" ]
 }
 
-@test "starting a port-forward uses https when the service has it, and a second start reuses it" {
+@test "a tunnel uses the scheme Argo CD answers on through it, and a second start reuses it" {
   got=$(pf_start prod)
-  [ "$(jq -r '"\(.url) \(.reused) \(.target)"' <<<"$got")" = "https://prod.localhost:28443 false argocd/svc/argocd-server" ]
+  # The service's port is named https, but this Argo CD speaks http (server.insecure): ask it.
+  [ "$(jq -r '"\(.url) \(.alt_url) \(.reused) \(.target)"' <<<"$got")" = "http://prod.localhost:28443 http://127.0.0.1:28443 false argocd/svc/argocd-server" ]
   port_open 28443
   grep -q -- "--context ctx-prod -n argocd port-forward svc/argocd-server 28443:443 --address localhost" "$FAKE_DIR/kubectl-calls"
   [ "$(pf_start prod | jq -r .reused)" = true ]
   [ "$(grep -c port-forward "$FAKE_DIR/kubectl-calls")" = 1 ]
   run cmd_pf
-  [[ "$output" == *"running"*"prod"*"https://prod.localhost:28443"* ]]
+  [[ "$output" == *"running"*"prod"*"http://prod.localhost:28443"* ]]
 }
 
 @test "stop closes the tunnel" {
@@ -82,7 +91,7 @@ unblock() { kill "$blocker"; wait "$blocker" 2>/dev/null || true; }
   [ "$(pf_host "Prod_EU 1")" = prod-eu-1.localhost ]
   [ "$(pf_host ___)" = localhost ]
   a=$(pf_start staging) b=$(pf_start prod)
-  [ "$(jq -r .url <<<"$a") $(jq -r .url <<<"$b")" = "https://staging.localhost:8080 https://prod.localhost:28443" ]
+  [ "$(jq -r .url <<<"$a") $(jq -r .url <<<"$b")" = "http://staging.localhost:8080 http://prod.localhost:28443" ]
   port_open 8080 && port_open 28443
 }
 
@@ -102,7 +111,7 @@ unblock() { kill "$blocker"; wait "$blocker" 2>/dev/null || true; }
   pf_start prod >/dev/null
   got=$(pf_status)
   [ "$(jq -c '[.[] | [.name, .alive, .port, .fixed, .login]]' <<<"$got")" = '[["staging",false,8080,false,true],["prod",true,28443,true,false]]' ]
-  [ "$(jq -r '.[1].url' <<<"$got")" = "https://prod.localhost:28443" ]
+  [ "$(jq -r '.[1].url' <<<"$got")" = "http://prod.localhost:28443" ]
 }
 
 @test "clear errors: unknown cluster, a service with nothing to forward" {
@@ -162,7 +171,7 @@ login_setup() {
       printf '\r\n%s' "$1"; } | serve_handle
   }
   [[ "$(post '{"cluster":"prod"}' | head -1)" == *403* ]]
-  [ "$(post '{"cluster":"prod"}' t0ken | sed '1,/^\r$/d' | jq -r .url)" = "https://prod.localhost:28443" ]
+  [ "$(post '{"cluster":"prod"}' t0ken | sed '1,/^\r$/d' | jq -r .url)" = "http://prod.localhost:28443" ]
   [[ "$(post '{"cluster":"prod; rm -rf /"}' t0ken | sed '1,/^\r$/d' | jq -r .error)" == *"No cluster named prodrm-rf"* ]]
 }
 
@@ -183,4 +192,38 @@ login_setup() {
   [ "$(req POST /api/portforward '{"cluster":"staging"}' | jq -r .port)" = 8080 ]
   [ "$(req POST /api/portforward/stop '{"cluster":"staging"}' | jq -r '.[0].alive')" = false ]
   ! port_open 8080
+}
+
+@test "a tunnel that opens but gets no answer from Argo CD is an error, not 'tunnel up'" {
+  export FAKE_PF=silent
+  got=$(pf_start prod) || true
+  [[ "$(jq -r .error <<<"$got")" == *"opened on port 28443, but Argo CD didn't answer through it over https or http"* ]]
+  ! port_open 28443   # and it isn't left running
+}
+
+@test "a role that can't port-forward is named as the cause" {
+  export FAKE_PF=forbidden
+  [[ "$(pf_start prod | jq -r .error)" == *"Your role can't port-forward in argocd (it needs create on pods/portforward)"* ]]
+}
+
+@test "a running tunnel whose pod stopped answering is restarted, not reused" {
+  pf_start prod >/dev/null
+  pid=$(jq -r .pid "$(pf_dir)/prod.json")
+  kill "$pid"; sleep 0.3
+  perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 28443, Listen => 5, ReuseAddr => 1) or die; sleep 30' port-forward &
+  zombie=$!
+  jq --argjson p "$zombie" '.pid = $p' "$(pf_dir)/prod.json" >"$BATS_TEST_TMPDIR/s" && mv "$BATS_TEST_TMPDIR/s" "$(pf_dir)/prod.json"
+  got=$(pf_start prod)
+  [ "$(jq -r .reused <<<"$got")" = false ] && [ "$(jq -r .pid <<<"$got")" != "$zombie" ]
+  ! kill -0 "$zombie" 2>/dev/null
+}
+
+@test "Check shows where a tunnel breaks: process, a request through it, RBAC, service, name and proxy" {
+  pf_start prod >/dev/null
+  got=$(pf_check prod)
+  [ "$(jq -r .title <<<"$got" | tr '\n' '|')" = "Tunnel process|Argo CD over https, through the tunnel|Argo CD over http, through the tunnel|kubectl port-forward log|Can you port-forward in argocd?|Service argocd-server and its endpoints|Argo CD server pods|What prod.localhost resolves to on this Mac|Proxy settings (a browser may send prod.localhost to a proxy, which can't reach your Mac)|" ]
+  [ "$(jq -r 'select(.title | startswith("Argo CD over http,")) | .ok' <<<"$got")" = true ]
+  [ "$(jq -r 'select(.title | startswith("Can you")) | "\(.ok) \(.output)"' <<<"$got")" = "false no" ]
+  run cmd_pf check prod
+  [[ "$output" == *"── Tunnel process"* ]]
 }

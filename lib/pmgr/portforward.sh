@@ -45,6 +45,31 @@ pf_planned_port() {
   if [ -n "$last" ]; then printf '%s' "$last"; else pf_port "$1"; fi
 }
 
+# pf_probe PORT [PREFERRED_SCHEME] : send a real request through the tunnel and print the scheme
+# Argo CD answered on (https or http), or nothing. kubectl opens the local port before it has
+# reached the pod, so an open port alone proves nothing: this is what makes the browser work.
+pf_probe() {
+  local port=$1 first=${2:-https} scheme code
+  for scheme in "$first" $([ "$first" = https ] && echo http || echo https); do
+    code=$(curl -sk --noproxy '*' -o /dev/null -w '%{http_code}' --max-time "${PF_PROBE_SECONDS:-8}" "$scheme://127.0.0.1:$port/" 2>/dev/null)
+    case $code in 000 | "") ;; *) printf '%s' "$scheme"; return 0 ;; esac
+  done
+  return 1
+}
+
+# pf_why LOGFILE NS : kubectl's port-forward errors, in plain words.
+pf_why() {
+  local log
+  log=$(grep -iE 'error|forbidden|refused|unable|lost connection|timeout' "$1" 2>/dev/null | tail -n 3 | tr '\n' ' ')
+  case $log in
+    *forbidden*) printf 'Your role can'"'"'t port-forward in %s (it needs create on pods/portforward). kubectl said: %s' "$2" "$log" ;;
+    *"connection refused"*) printf 'The Argo CD pod refused the connection on that port, so the service port may point at the wrong container port. kubectl said: %s' "$log" ;;
+    *"not running"* | *"no endpoints"* | *"does not have any active Endpoint"*) printf 'Argo CD has no running pod behind the service. kubectl said: %s' "$log" ;;
+    "") printf 'kubectl reported no error, so either that service port isn'"'"'t Argo CD'"'"'s web port (check argocd_service and argocd_namespace), or the request never reached the cluster (VPN, or the session expired).' ;;
+    *) printf 'kubectl said: %s' "$log" ;;
+  esac
+}
+
 pf_alive() { # NAME : 0 if its port-forward process is still running
   local f
   f="$(pf_dir)/$1.json"
@@ -59,8 +84,12 @@ pf_start() {
   dir=$(pf_dir)
   mkdir -p "$dir" && chmod 700 "$dir"
   if pf_alive "$name"; then
-    jq -c '. + {reused: true}' "$dir/$name.json"
-    return 0
+    # Still answering? Then reuse it. A tunnel whose pod went away is restarted instead.
+    if pf_probe "$(jq -r .port "$dir/$name.json")" "$(jq -r '.url | split(":")[0]' "$dir/$name.json")" >/dev/null; then
+      jq -c '. + {reused: true}' "$dir/$name.json"
+      return 0
+    fi
+    pf_stop "$name"
   fi
   ctx=$(jq -r .context <<<"$c") profile=$(jq -r .aws_profile <<<"$c")
   ns=$(jq -r '.argocd_namespace // "argocd"' <<<"$c") svc=$(jq -r '.argocd_service // "argocd-server"' <<<"$c")
@@ -99,12 +128,23 @@ pf_start() {
   while ! port_open "$port" && [ "$i" -lt 40 ] && kill -0 "$pid" 2>/dev/null; do sleep 0.25; i=$((i + 1)); done
   if ! port_open "$port"; then
     kill "$pid" 2>/dev/null
-    jq -cn --arg e "$(tail -n 3 "$log" | tr '\n' ' ')" --arg name "$name" '{error: "The port-forward for \($name) didn'"'"'t start: \($e)"}'
+    jq -cn --arg e "$(pf_why "$log" "$ns")" --arg name "$name" '{error: "The tunnel to \($name) didn'"'"'t start. \($e)"}'
     return 1
   fi
+  # Ask Argo CD itself, through the tunnel, and use whichever scheme it answers on: with
+  # server.insecure it speaks plain http even behind a port named https.
+  local answered
+  if ! answered=$(pf_probe "$port" "$scheme"); then
+    jq -cn --arg e "$(pf_why "$log" "$ns")" --arg name "$name" --arg port "$port" \
+      '{error: "The tunnel to \($name) opened on port \($port), but Argo CD didn'"'"'t answer through it over https or http. \($e)"}'
+    kill "$pid" 2>/dev/null
+    return 1
+  fi
+  scheme=$answered
   jq -cn --arg name "$name" --arg url "$scheme://$(pf_host "$name"):$port" --argjson pid "$pid" --arg ctx "$ctx" --arg svc "$svc" \
     --arg ns "$ns" --argjson port "$port" \
-    '{name: $name, url: $url, pid: $pid, port: $port, context: $ctx, target: "\($ns)/svc/\($svc)", started_at: (now | todateiso8601), reused: false}' \
+    --arg alt "$scheme://127.0.0.1:$port" \
+    '{name: $name, url: $url, alt_url: $alt, pid: $pid, port: $port, context: $ctx, target: "\($ns)/svc/\($svc)", started_at: (now | todateiso8601), reused: false}' \
     | tee "$dir/$name.json"
   printf '%s\n' "$port" >"$dir/$name.port"
 }
@@ -121,11 +161,38 @@ pf_status() {
     out=$(jq -c --arg n "$name" --argjson s "$state" --argjson alive "$alive" --arg planned "$(pf_planned_port "$name")" \
       --argjson c "$(diag_cluster "$name")" \
       --arg host "$(pf_host "$name")" \
-      '. + [{name: $n, alive: $alive, url: ($s.url // null), host: $host, port: ($s.port // ($planned | tonumber)),
+      '. + [{name: $n, alive: $alive, url: ($s.url // null), alt_url: ($s.alt_url // null), host: $host, port: ($s.port // ($planned | tonumber)),
              fixed: ($c.argocd_port != null), login: (($c.argocd_secret // "") != ""),
              username: ($c.argocd_username // null)}]' <<<"$out")
   done < <(cfg '.clusters // [] | .[].name')
   printf '%s\n' "$out"
+}
+
+# pf_check NAME : where a tunnel breaks, as Diagnose sections: the process and its log, a request
+# through it, RBAC, the service and its pods, and what the browser does with NAME.localhost.
+pf_check() {
+  local name=$1 c f ns svc port host
+  c=$(diag_cluster "$name")
+  [ -n "$c" ] || { jq -cn --arg n "$name" '{title: "Tunnel", command: "", output: "No cluster named \($n) in your config.", ok: false}'; return 0; }
+  ns=$(jq -r '.argocd_namespace // "argocd"' <<<"$c") svc=$(jq -r '.argocd_service // "argocd-server"' <<<"$c")
+  f="$(pf_dir)/$name.json"
+  port=$(pf_planned_port "$name") host=$(pf_host "$name")
+  if pf_alive "$name"; then
+    port=$(jq -r .port "$f")
+    diag_section "Tunnel process" ps -o pid,etime,command -p "$(jq -r .pid "$f")"
+    local scheme
+    for scheme in https http; do
+      diag_section "Argo CD over $scheme, through the tunnel" curl -skI --noproxy '*' --max-time 8 "$scheme://127.0.0.1:$port/"
+    done
+  else
+    jq -cn '{title: "Tunnel process", command: "", output: "Not running. Create tunnel starts it.", ok: false}'
+  fi
+  [ -f "$(pf_dir)/$name.log" ] && diag_section "kubectl port-forward log" tail -n 25 "$(pf_dir)/$name.log"
+  diag_section "Can you port-forward in $ns?" diag_k8s "$c" auth can-i create pods/portforward -n "$ns"
+  diag_section "Service $svc and its endpoints" diag_k8s "$c" get "svc/$svc" "endpoints/$svc" -n "$ns" -o wide
+  diag_section "Argo CD server pods" diag_k8s "$c" get pods -n "$ns" -l "app.kubernetes.io/name=$svc" -o wide
+  diag_section "What $host resolves to on this Mac" dscacheutil -q host -a name "$host"
+  diag_section "Proxy settings (a browser may send $host to a proxy, which can't reach your Mac)" scutil --proxy
 }
 
 # ---------- login ----------
@@ -242,8 +309,12 @@ cmd_pf() {
           [ "$no_open" -eq 1 ] || open_url "$(jq -r .url <<<"$result")"
         fi
       done
-      [ "$code" -eq 0 ] || printf '\nIf it says forbidden, your role needs pods/portforward in the Argo CD namespace.\n' >&2
+      [ "$code" -eq 0 ] || printf '\nCheck shows where it breaks: pmgr pf check CLUSTER (or the Check button in pmgr ui).\n' >&2
       return "$code"
+      ;;
+    check)
+      [ $# -gt 0 ] || die "Usage: pmgr pf check CLUSTER"
+      pf_check "$1" | jq -r '"── \(.title) " + ("─" * ([60 - (.title | length), 3] | max)), (if .command != "" then "$ \(.command)" else empty end), .output, ""'
       ;;
     login)
       [ $# -gt 0 ] || die "Usage: pmgr pf login CLUSTER"
@@ -258,7 +329,7 @@ cmd_pf() {
         for n in "$@"; do pf_stop "$n" && printf 'Stopped %s.\n' "$n"; done
       fi
       ;;
-    *) die "Usage: pmgr pf [list | status] | pmgr pf argo CLUSTER... | --all | pmgr pf login CLUSTER | pmgr pf stop [CLUSTER... | all]" ;;
+    *) die "Usage: pmgr pf [list | status] | pmgr pf argo CLUSTER... | --all | pmgr pf login CLUSTER | pmgr pf check CLUSTER | pmgr pf stop [CLUSTER... | all]" ;;
   esac
 }
 

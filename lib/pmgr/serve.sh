@@ -124,14 +124,14 @@ serve_handle() {
     "GET /api/portforward")
       "$PMGR_ROOT/bin/pmgr" __pf status >"$SERVE_DIR/pf.json" 2>/dev/null </dev/null || printf '[]' >"$SERVE_DIR/pf.json"
       serve_respond "200 OK" "application/json" "$SERVE_DIR/pf.json" ;;
-    "POST /api/portforward" | "POST /api/portforward/stop" | "POST /api/argo-login")
+    "POST /api/portforward" | "POST /api/portforward/stop" | "POST /api/portforward/check" | "POST /api/argo-login")
       if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
         serve_text "403 Forbidden" "Port-forwarding needs the token header."
       else
         # Only a cluster name from the browser; pmgr refuses names that aren't in the config. The
         # login route copies the password to this machine's clipboard and answers without it.
         local cluster action=start
-        case $path in */stop) action=stop ;; */argo-login) action=login ;; esac
+        case $path in */stop) action=stop ;; */check) action=check ;; */argo-login) action=login ;; esac
         cluster=$(jq -r '.cluster // ""' <<<"$body" 2>/dev/null | tr -cd 'A-Za-z0-9._-')
         "$PMGR_ROOT/bin/pmgr" __pf "$action" "${cluster:-none}" >"$SERVE_DIR/pf.json" 2>/dev/null </dev/null
         [ -s "$SERVE_DIR/pf.json" ] || printf '{"error": "pmgr didn'"'"'t answer."}' >"$SERVE_DIR/pf.json"

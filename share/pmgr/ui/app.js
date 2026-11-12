@@ -200,6 +200,7 @@ function argoSlot(cluster) { return h("span", { "data-pf": cluster }, argoButton
 // from AWS Secrets Manager and copied to the clipboard by pmgr ui; it never reaches this page.
 app.tunnelBusy = {};
 app.tunnelNote = {};
+app.tunnelCheck = {};
 function refreshTunnels() {
   if (!app.live) return;
   api("/api/portforward")
@@ -211,7 +212,18 @@ function drawTunnels() {
   const el = document.getElementById("tunnels");
   if (el) el.replaceChildren(...tunnelTable().filter(Boolean));
 }
+async function tunnelCheck(name) {
+  app.tunnelCheck[name] = { loading: true };
+  drawTunnels();
+  try {
+    app.tunnelCheck[name] = { sections: await api("/api/portforward/check", "POST", { cluster: name }) };
+  } catch (e) {
+    app.tunnelCheck[name] = { error: e.message };
+  }
+  drawTunnels();
+}
 async function tunnelAction(name, action) {
+  if (action === "check") return tunnelCheck(name);
   app.tunnelBusy[name] = action;
   app.tunnelNote[name] = null;
   drawTunnels();
@@ -245,22 +257,36 @@ function tunnelTable() {
       : t.alive ? h("a", { href: t.url, target: "_blank", rel: "noopener noreferrer" }, t.url.replace(/^https?:\/\//, ""))
       : h("span", { title: t.fixed ? "argocd_port in your config" : "Last port used, else 8080 + the cluster's position. If it's taken, a free port is picked." },
           `${t.host}:${t.port}`, h("span", { class: "muted" }, t.fixed ? " fixed" : " auto"));
+    const check = app.tunnelCheck[c.name] || {};
+    const checkBtn = () => {
+      const b = h("button", { type: "button", class: "ghost diag-btn", disabled: !!check.loading }, check.loading ? "Checking…" : "Check");
+      b.addEventListener("click", () => tunnelCheck(c.name));
+      return b;
+    };
     const actions = !app.live ? h("span", { class: "muted" }, "in pmgr ui")
       : !t ? null
       : t.alive ? h("span", { class: "pf" },
           h("a", { class: "button-link", href: t.url, target: "_blank", rel: "noopener noreferrer" }, "Open Argo CD"),
           t.login ? btn("Copy password", "login") : null,
-          btn("Stop", "stop"))
-      : h("span", { class: "pf" }, btn("Create tunnel", "start", reachable ? "primary btn-sm" : "ghost diag-btn"), t.login ? btn("Copy password", "login") : null);
-    return h("tr", { class: t && t.alive ? "row-now" : "" },
+          checkBtn(), btn("Stop", "stop"))
+      : h("span", { class: "pf" }, btn("Create tunnel", "start", reachable ? "primary btn-sm" : "ghost diag-btn"), t.login ? btn("Copy password", "login") : null, checkBtn());
+    const checkRow = check.loading || check.sections || check.error
+      ? h("tr", { class: "check-row" }, h("td", { colspan: "6" },
+          check.loading ? h("p", { class: "muted" }, h("span", { class: "spin", "aria-hidden": "true" }), `Checking the ${c.name} tunnel: the process, a request through it, permissions, the service and how this Mac resolves ${t ? t.host : "its name"}…`)
+          : check.error ? h("p", { class: "banner" }, `Check didn't finish: ${check.error}`)
+          : h("div", { class: "diag" }, diagSections(check.sections))))
+      : null;
+    return [h("tr", { class: t && t.alive ? "row-now" : "" },
       h("td", {}, h("b", {}, c.name), h("div", { class: "muted small" }, c.context)),
       h("td", {}, reachable ? h("span", { class: "chip-s ok" }, "reachable") : h("span", { class: "chip-s off", title: "At the last sync. Renewed your session since? Create tunnel tries anyway." }, (K8S_STATE[c.kubernetes] || ["", c.kubernetes])[1])),
       h("td", {}, !t ? "" : t.alive ? h("span", { class: "chip-s ok" }, "running") : h("span", { class: "chip-s off" }, "off")),
       h("td", { class: "n" }, port),
       h("td", {}, !t ? "" : t.login ? (t.username || "from secret") : h("span", { class: "muted" }, "add argocd_secret")),
       h("td", {}, actions,
+        t && t.alive && t.alt_url ? h("div", { class: "muted small" }, "Browser can't reach it? Try ",
+          h("a", { href: t.alt_url, target: "_blank", rel: "noopener noreferrer" }, t.alt_url.replace(/^https?:\/\//, ""))) : null,
         note && note.ok ? h("div", { class: "pf-ok" }, note.ok) : null,
-        note && note.error ? h("div", { class: "pf-error" }, note.error) : null));
+        note && note.error ? h("div", { class: "pf-error" }, note.error) : null)), checkRow];
   });
   return [
     app.tunnelError ? h("p", { class: "pf-error" }, app.tunnelError) : null,
@@ -271,17 +297,21 @@ function tunnelTable() {
 // ---------- diagnose ----------
 // Runs the read-only commands you'd run by hand for this finding (describe, events, logs, the failing
 // job's log) on the pmgr ui server, and shows the output under the finding.
+function diagSections(sections) {
+  return sections.map((x, i) =>
+    h("details", { class: `diag-sec${x.ok ? "" : " failed"}`, open: i < 3 || !x.ok },
+      h("summary", {}, x.title, x.ok ? null : h("span", { class: "chip-s bad" }, "command failed")),
+      x.command ? h("p", { class: "diag-cmd" }, h("code", {}, x.command), copyButton(x.command)) : null,
+      h("pre", {}, x.output)));
+}
+
 function diagPanel(f) {
   const state = app.diag[f.id];
   if (!state) return null;
   if (state.loading) return h("div", { class: "diag" }, h("p", { class: "muted" }, h("span", { class: "spin", "aria-hidden": "true" }), "Diagnosing: gathering describe output, events and logs…"));
   if (state.error) return h("div", { class: "diag" }, h("p", { class: "banner" }, `Diagnose didn't finish: ${state.error}`));
   if (!state.sections.length) return h("div", { class: "diag" }, h("p", { class: "muted" }, "Nothing more to look up for this finding."));
-  return h("div", { class: "diag" }, state.sections.map((x, i) =>
-    h("details", { class: `diag-sec${x.ok ? "" : " failed"}`, open: i < 3 || !x.ok },
-      h("summary", {}, x.title, x.ok ? null : h("span", { class: "chip-s bad" }, "command failed")),
-      x.command ? h("p", { class: "diag-cmd" }, h("code", {}, x.command), copyButton(x.command)) : null,
-      h("pre", {}, x.output))));
+  return h("div", { class: "diag" }, diagSections(state.sections));
 }
 
 async function runDiagnose(f, slot) {

@@ -345,6 +345,7 @@ main() {
         start) pf_start "${2:?}" || true ;;
         stop) pf_stop "${2:?}"; pf_status ;;
         login) pf_login "${2:?}" || true ;;
+        check) pf_check "${2:?}" | jq -cs . ;;
         status) pf_status ;;
       esac
       ;;
