@@ -333,7 +333,7 @@ main() {
     help | -h | --help) usage; return 0 ;;
     version | --version) printf 'pmgr %s\n' "$PMGR_VERSION"; return 0 ;;
   esac
-  need jq jq
+  need_jq
   need yq yq
   pmgr_tmp_init
   [ "$cmd" = init ] && { cmd_init "$@"; exit $?; }

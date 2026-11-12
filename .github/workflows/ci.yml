@@ -14,17 +14,20 @@ concurrency:
 
 jobs:
   test:
-    # macOS, because that's where pmgr runs: this also proves it works on the system bash 3.2.
-    runs-on: macos-latest
-    # The tests take about two minutes; the rest is headroom for slow macOS runner queues, which
-    # count against this limit.
-    timeout-minutes: 30
+    # Ubuntu runners start right away. Homebrew (preinstalled on GitHub's Ubuntu image) installs the
+    # same jq, yq, shellcheck and bats versions a Mac gets, so this tests what pmgr actually runs with.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: brew install jq yq shellcheck bats-core
-      - run: /bin/bash --version | head -1
+      - name: Install tools with Homebrew
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew install jq yq shellcheck bats-core
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - run: jq --version && yq --version && bats --version && shellcheck --version | sed -n 2p
       - run: shellcheck bin/pmgr lib/pmgr/*.sh tests/stubs/fake tests/helpers.bash
       - run: bats tests/
       - run: bin/pmgr version

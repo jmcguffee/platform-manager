@@ -95,7 +95,7 @@ EOF
   run "$PMGR" ui --file --no-open
   html="$XDG_CACHE_HOME/platform-manager/dashboard.html"
   [ -f "$html" ]
-  [ "$(stat -f %Lp "$html" 2>/dev/null || stat -c %a "$html")" = 600 ]
+  [ "$(stat -c %a "$html" 2>/dev/null || stat -f %Lp "$html")" = 600 ]
   grep -q 'id="pmgr-data"' "$html"
   grep -q '<style>' "$html"
   ! grep -q '</script><img' "$html"
@@ -114,9 +114,19 @@ EOF
       {name: "u2", user: {}}]}')" "" kubectl config view
   run "$PMGR" init --from-kubeconfig
   [ "$status" -eq 0 ]
-  [ "$(stat -f %Lp "$PMGR_CONFIG" 2>/dev/null || stat -c %a "$PMGR_CONFIG")" = 600 ]
+  [ "$(stat -c %a "$PMGR_CONFIG" 2>/dev/null || stat -f %Lp "$PMGR_CONFIG")" = 600 ]
   got=$(yq -o=json '.clusters' "$PMGR_CONFIG")
   [ "$(jq -c '.[0]' <<<"$got")" = '{"name":"prod","context":"arn:aws:eks:us-east-1:111:cluster/prod","aws_profile":"prd","region":"us-east-1"}' ]
   [ "$(jq -c '.[1]' <<<"$got")" = '{"name":"demo","context":"demo","aws_profile":"dev","region":"us-east-2","eks_cluster":"demo"}' ]
   [ "$(jq length <<<"$got")" = 2 ]
+}
+
+@test "an older jq is refused with a clear message, not parse errors" {
+  mkdir -p "$BATS_TEST_TMPDIR/oldjq"
+  printf '#!/usr/bin/env bash\n[ "$1" = --version ] && { echo jq-1.7.1; exit 0; }\nexec %s "$@"\n' "$(command -v jq)" >"$BATS_TEST_TMPDIR/oldjq/jq"
+  chmod +x "$BATS_TEST_TMPDIR/oldjq/jq"
+  run env PATH="$BATS_TEST_TMPDIR/oldjq:$PATH" "$PMGR_ROOT/bin/pmgr" status
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"jq 1.8 or later is required; this is jq 1.7.1. Upgrade it with: brew upgrade jq"* ]]
+  need_jq   # the real one passes
 }

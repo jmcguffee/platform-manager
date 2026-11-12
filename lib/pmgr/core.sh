@@ -19,6 +19,17 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required. Install it with: brew install ${2:-$1}"
 }
 
+# need_jq : jq 1.8 or later. Older jq (1.7, as some Linux distributions ship) rejects syntax pmgr uses,
+# and would fail with confusing parse errors instead of this.
+need_jq() {
+  need jq jq
+  local v
+  v=$(jq --version 2>/dev/null | sed -E 's/^jq-//')
+  case $v in
+    1.[0-7] | 1.[0-7].* | 0.*) die "jq 1.8 or later is required; this is jq $v. Upgrade it with: brew upgrade jq" ;;
+  esac
+}
+
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 first_line() {

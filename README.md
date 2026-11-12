@@ -66,8 +66,9 @@ It needs the `aws` (v2), `kubectl` and `gh` CLIs you already use, plus `jq` and
 brew install jq yq
 ```
 
-It runs on the bash that ships with macOS (3.2), so you don't need a newer bash.
-To update, run `git pull` in the clone.
+It needs jq 1.8 or later (what Homebrew installs; `brew upgrade jq` if yours is older) and says
+so if it finds an older one. It runs on the bash that ships with macOS (3.2), so you don't need a
+newer bash. To update, run `git pull` in the clone.
 
 ### Datadog on-call
 

@@ -1,3 +1,5 @@
 # Fix text quotes commands in Markdown backticks on purpose, so `...` inside single quotes is literal.
 disable=SC2016
+# cat FILE 2>/dev/null | jq tolerates a missing file (jq gets empty input); jq FILE would fail.
+disable=SC2002
 shell=bash
