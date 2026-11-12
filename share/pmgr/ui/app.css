@@ -317,3 +317,4 @@ tr.check-row td { background: var(--page); }
 a.button-link { padding: 4px 10px; border: 1px solid var(--rule-2); border-radius: inherit; text-decoration: none; font-size: 13px; }
 a.button-link:hover { border-color: var(--accent); background: var(--accent-wash); }
 .env-list dd { font-weight: 400; }
+.chip-s.warn { background: var(--warn-wash, var(--sunken)); color: var(--warn); }

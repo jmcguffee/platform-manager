@@ -133,6 +133,24 @@ diagnose_finding() { # DIAG_JSON
       ;;
     rds | redshift | elasticache | msk | ec2 | eks) diag_aws "$d" ;;
     cluster) diag_cluster_access "$d" ;;
+    eks_addon)
+      diag_section "Add-on $(jq -r .addon <<<"$d")" aws eks describe-addon --cluster-name "$(jq -r .cluster <<<"$d")" --addon-name "$(jq -r .addon <<<"$d")" \
+        --profile "$(jq -r .profile <<<"$d")" --region "$(jq -r .region <<<"$d")" --output yaml
+      diag_section "Versions for this cluster" aws eks describe-addon-versions --addon-name "$(jq -r .addon <<<"$d")" \
+        --profile "$(jq -r .profile <<<"$d")" --region "$(jq -r .region <<<"$d")" --output table \
+        --query 'addons[0].addonVersions[0:8].{Version:addonVersion,Default:compatibilities[0].defaultVersion}'
+      ;;
+    eks_nodegroup)
+      diag_section "Node group $(jq -r .nodegroup <<<"$d")" aws eks describe-nodegroup --cluster-name "$(jq -r .cluster <<<"$d")" --nodegroup-name "$(jq -r .nodegroup <<<"$d")" \
+        --profile "$(jq -r .profile <<<"$d")" --region "$(jq -r .region <<<"$d")" --output yaml \
+        --query 'nodegroup.{status:status,version:version,releaseVersion:releaseVersion,amiType:amiType,capacityType:capacityType,instanceTypes:instanceTypes,scaling:scalingConfig,health:health,launchTemplate:launchTemplate,asg:resources.autoScalingGroups}'
+      local asg
+      asg=$(aws eks describe-nodegroup --cluster-name "$(jq -r .cluster <<<"$d")" --nodegroup-name "$(jq -r .nodegroup <<<"$d")" \
+        --profile "$(jq -r .profile <<<"$d")" --region "$(jq -r .region <<<"$d")" --query 'nodegroup.resources.autoScalingGroups[0].name' --output text 2>/dev/null)
+      [ -z "$asg" ] || [ "$asg" = None ] || diag_section "Recent Auto Scaling activity" aws autoscaling describe-scaling-activities --auto-scaling-group-name "$asg" \
+        --max-items 8 --profile "$(jq -r .profile <<<"$d")" --region "$(jq -r .region <<<"$d")" --output table \
+        --query 'Activities[].{When:StartTime,Status:StatusCode,What:Description,Why:StatusMessage}'
+      ;;
     tgb)
       local p r arn svc
       p=$(jq -r .profile <<<"$d") r=$(jq -r .region <<<"$d") arn=$(jq -r '.tg_arn // ""' <<<"$d") svc=$(jq -r '.svc // ""' <<<"$d")

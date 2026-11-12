@@ -256,6 +256,23 @@ health check settings, the Service and its endpoints, and the controller's recen
 `get`/`list` on `targetgroupbindings.elbv2.k8s.aws`, services and endpointslices, and
 `elasticloadbalancing:DescribeTargetGroups` and `DescribeTargetHealth`.
 
+## Lifecycle
+
+`pmgr lifecycle` (and the Lifecycle view) reads what ages out, using AWS's own calendar
+(`eks describe-cluster-versions`) rather than dates baked into pmgr:
+
+- clusters in extended support, with what it costs (`$0.60` instead of `$0.10` per cluster-hour,
+  about $365 a month each; set `cost.eks_extended_usd_hour` if your price differs), counted as savings
+- clusters past extended support, and standard support ending within 180 days, saying whether AWS
+  will upgrade the cluster itself (upgrade policy STANDARD) or start charging for extended support
+- add-ons reporting health issues, and add-ons behind the newest version for that Kubernetes version
+- node groups reporting health issues (with the usual cause), lagging the control plane, behind
+  AWS's recommended AMI release (from the public SSM parameters), or on an AMI type AWS no longer
+  publishes for their version
+
+It needs only the AWS session (no cluster access). Diagnose on an add-on or node group shows its
+full status, versions, and recent Auto Scaling activity.
+
 ## Regions
 
 Utilization and security check every region you run in, account by account. Unless you say

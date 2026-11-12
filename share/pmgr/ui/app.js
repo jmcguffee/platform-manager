@@ -5,8 +5,8 @@
 
 const SEV = ["critical", "error", "warning", "info"];
 const SEV_LABEL = { critical: "Critical", error: "Error", warning: "Warning", info: "Suggestion" };
-const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "traffic", "utilization", "pipelines", "workflows", "argo", "sources"];
-const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], traffic: ["traffic"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
+const VIEWS = ["overview", "actions", "oncall", "access", "security", "workloads", "traffic", "lifecycle", "utilization", "pipelines", "workflows", "argo", "sources"];
+const AREAS = { oncall: ["oncall"], access: ["auth", "cluster"], security: ["security"], workloads: ["workload"], traffic: ["traffic"], lifecycle: ["lifecycle"], utilization: ["utilization"], pipelines: ["pipeline"], workflows: ["workflow"], argo: ["argo"] };
 const SERVICE = { rds: "RDS", redshift: "Redshift", elasticache: "ElastiCache", msk: "MSK", eks: "EKS" };
 
 const AWS_STATE = {
@@ -868,6 +868,47 @@ function access() {
   ];
 }
 
+// ---------- posture views ----------
+// One shape for every area that's a list of findings plus an optional table: a verdict, filters,
+// findings grouped by their first resource parts, the table, and what wasn't checked.
+function areaView(view, o) {
+  const all = inView(view);
+  const container = h("div");
+  const draw = () => {
+    const list = all.filter(passes);
+    container.replaceChildren(...(list.length
+      ? grouped(list, o.group || ((f) => f.resource.split("/").slice(0, 2).join(" › ")), (items) => items.some((f) => f.severity !== "info"))
+      : [h("p", { class: "empty" }, all.length ? "No findings match these filters." : o.empty)]));
+  };
+  draw();
+  return [
+    h("h2", { class: `verdict${hasErrors(all) ? " bad" : ""}` }, hasErrors(all) ? o.bad : all.some((f) => f.severity === "warning") ? o.warn : o.good),
+    h("p", { class: "verdict-sub" }, o.sub),
+    all.length ? filters(draw, o.filter || "Filter findings") : null,
+    container,
+    o.tables ? o.tables() : null,
+    unseenNote(),
+  ];
+}
+
+const EKS_STATUS = { STANDARD_SUPPORT: ["ok", "standard support"], EXTENDED_SUPPORT: ["warn", "extended support"], UNSUPPORTED: ["bad", "unsupported"] };
+function lifecycle() {
+  const rows = metrics("eks_version");
+  return areaView("lifecycle", {
+    bad: "Something has aged out.", warn: "Upgrades are due.", good: rows.length ? "Versions are current." : "No EKS clusters read.",
+    sub: "EKS versions against AWS's own support calendar (and what extended support costs), add-on versions and health, node group AMIs, version skew and health.",
+    empty: rows.length ? "Nothing is out of support, behind, or unhealthy." : "No EKS cluster with a working AWS session.",
+    filter: "Filter by cluster, add-on or node group",
+    tables: () => rows.length ? [h("h2", {}, "EKS versions"),
+      table([["Cluster"], ["Version"], ["Support"], ["Standard support ends"], ["Extended ends"], ["Newest"], ["Upgrade policy"], ["Add-ons behind", true]],
+        rows.map((r) => h("tr", { class: r.status === "STANDARD_SUPPORT" ? "" : "row-bad" },
+          h("td", {}, h("b", {}, r.cluster), h("div", { class: "muted small" }, `${r.name}, ${r.region}`)),
+          h("td", {}, r.version), h("td", {}, h("span", { class: `chip-s ${(EKS_STATUS[r.status] || ["off"])[0]}` }, (EKS_STATUS[r.status] || ["", r.status || "unknown"])[1])),
+          h("td", {}, r.standard_end || "–"), h("td", {}, r.extended_end || "–"), h("td", {}, r.newest || "–"),
+          h("td", {}, (r.policy || "").toLowerCase()), h("td", { class: "n" }, num(r.addons_outdated)))))] : null,
+  });
+}
+
 // ---------- load balancing ----------
 const TGB_STATE = { ok: ["ok", "healthy"], unhealthy: ["bad", "unhealthy"], empty: ["bad", "no targets"], detached: ["bad", "no load balancer"], missing: ["bad", "target group missing"] };
 function traffic() {
@@ -1114,12 +1155,12 @@ function argo() {
   ];
 }
 
-const RENDER = { overview, actions, oncall, access, security, workloads, traffic, utilization, pipelines, workflows, argo, sources: sourcesView };
+const RENDER = { overview, actions, oncall, access, security, workloads, traffic, lifecycle, utilization, pipelines, workflows, argo, sources: sourcesView };
 
 // ---------- shell ----------
 const NAV = [
   ["Today", [["overview", "Overview"], ["actions", "Action items"], ["oncall", "On-call"]]],
-  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["traffic", "Load balancing"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
+  ["Infrastructure", [["access", "Access"], ["security", "Security"], ["workloads", "Workloads"], ["traffic", "Load balancing"], ["lifecycle", "Lifecycle"], ["utilization", "Utilization"], ["argo", "Argo CD"]]],
   ["Delivery", [["pipelines", "Pipelines"], ["workflows", "Workflow gaps"]]],
   ["System", [["sources", "Sources"]]],
 ];
