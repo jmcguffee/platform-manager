@@ -342,6 +342,7 @@ function findingRow(f) {
     { class: `finding ${f.severity}` },
     h("div", { class: "f-head" },
       h("span", { class: "sev" }, SEV_LABEL[f.severity]),
+      isNew(f) ? h("span", { class: "chip-s new", title: "Not in the last run" }, "new") : null,
       h("span", { class: "where" }, f.resource),
       f.savings_usd_month ? h("span", { class: "save", title: "At on-demand list price" },
         `${f.savings_note === "up to" ? "up to " : ""}${usd(f.savings_usd_month)}/mo`) : null),
@@ -590,6 +591,25 @@ function stats(items) {
   return h("dl", { class: "stats" }, items.map(([label, value, tone, href]) => h("div", { class: tone || "" },
     href ? h("a", { href }, h("dt", {}, label), h("dd", {}, value)) : [h("dt", {}, label), h("dd", {}, value)])));
 }
+// What changed since the last comparable run (report.changes, from pmgr's history).
+function isNew(f) {
+  const ch = app.report && app.report.changes;
+  if (!ch) return false;
+  app.newIds = app.newIds || new Set(ch.new.map((x) => x.id));
+  return app.newIds.has(f.id);
+}
+function changesPanel() {
+  const ch = app.report.changes;
+  if (!ch) return panel("Since the last run", null, h("p", { class: "empty" }, "This is the first run pmgr has kept. The next one shows what's new and what got fixed."));
+  const row = (x, tone) => h("li", { class: `change ${tone}` }, h("span", { class: `chip-s ${tone === "fixed" ? "ok" : x.severity === "info" ? "off" : "bad"}` }, tone === "fixed" ? "fixed" : tone === "unchecked" ? "not checked" : SEV_LABEL[x.severity]),
+    h("span", { class: "where" }, x.resource), h("div", { class: "muted small" }, x.message));
+  const list = [...ch.new.map((x) => row(x, "new")), ...ch.fixed.map((x) => row(x, "fixed")), ...ch.unchecked.map((x) => row(x, "unchecked"))];
+  return panel("Since the last run", null,
+    list.length ? h("ul", { class: "changes" }, list.slice(0, 8), list.length > 8 ? h("li", { class: "muted small" }, `and ${list.length - 8} more`) : null)
+      : h("p", { class: "empty" }, "Nothing new, nothing fixed."),
+    `${ch.new.length} new, ${ch.fixed.length} fixed${ch.unchecked.length ? `, ${ch.unchecked.length} not checked` : ""} since ${when(ch.since)}`);
+}
+
 function panel(title, href, body, note) {
   return h("section", { class: "panel" },
     h("div", { class: "panel-head" }, h("h3", {}, title), note ? h("span", { class: "tally" }, note) : null, href ? h("a", { href }, "Open") : null),
@@ -624,7 +644,7 @@ function overview() {
   const busiest = [...wfs].sort((a, b) => b.minutes - a.minutes).slice(0, 5);
   const unread = sources().filter((x) => !x.ok).length;
 
-  const right = [];
+  const right = [changesPanel()];
   if (dd && metrics("shift").length) {
     const mine = now.filter(isMine);
     right.push(panel("On call now", "#oncall", (mine.length ? mine : now).length

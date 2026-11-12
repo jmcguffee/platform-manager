@@ -7,6 +7,8 @@
 def day: .[0:10] + "T00:00:00Z" | fromdateiso8601;
 def ymd: todate[0:10];
 def minor: split(".") | (.[1] // "0") | tonumber;
+# Dollars with cents, the same on every jq build ("0.60", never "0.6" on one and "0.60" on another).
+def usd: (. * 100 | round) as $c | "\($c / 100 | floor).\($c % 100 | tostring | if length == 1 then "0" + . else . end)";
 
 . as $in
 | def days_until($t): (($t - $in.now) / 86400) | floor;
@@ -37,7 +39,7 @@ def minor: split(".") | (.[1] // "0") | tonumber;
          fix: "Upgrade one minor version at a time\(if ($newer | length) > 0 then ": \($newer | join(" → "))" else "" end). Upgrade add-ons and node groups between steps."}),
     (select(($unsupported | not) and ($status == "EXTENDED_SUPPORT" or ($std_end != null and $std_end < $in.now)))
      | $base + {check: "eks.extended_support", severity: "warning",
-         message: "\($c.name) runs Kubernetes \($v), in extended support since \($std_end // 0 | ymd). That's $\($in.cost.extended // 0.60)/hour instead of $\($in.cost.standard // 0.10), about $\($extra_month | round)/month more\(if $ext_end then ", and extended support ends \($ext_end | ymd)" else "" end)",
+         message: "\($c.name) runs Kubernetes \($v), in extended support since \($std_end // 0 | ymd). That's $\($in.cost.extended // 0.60 | usd)/hour instead of $\($in.cost.standard // 0.10 | usd), about $\($extra_month | round)/month more\(if $ext_end then ", and extended support ends \($ext_end | ymd)" else "" end)",
          fix: "Upgrade to a version in standard support\(if ($newer | length) > 0 then ": \($newer | join(" → "))" else "" end), one minor version at a time.",
          savings_usd_month: $extra_month, evidence: {version: $v, standard_end: ($std_end // 0 | ymd)}}),
     (select($status == "STANDARD_SUPPORT" and $std_end != null and $std_end >= $in.now and days_until($std_end) <= 180)

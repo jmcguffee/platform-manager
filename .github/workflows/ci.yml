@@ -29,5 +29,5 @@ jobs:
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
       - run: jq --version && yq --version && bats --version && shellcheck --version | sed -n 2p
       - run: shellcheck bin/pmgr lib/pmgr/*.sh tests/stubs/fake tests/helpers.bash
-      - run: bats tests/
+      - run: bats --print-output-on-failure tests/
       - run: bin/pmgr version

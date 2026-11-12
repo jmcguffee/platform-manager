@@ -318,3 +318,6 @@ a.button-link { padding: 4px 10px; border: 1px solid var(--rule-2); border-radiu
 a.button-link:hover { border-color: var(--accent); background: var(--accent-wash); }
 .env-list dd { font-weight: 400; }
 .chip-s.warn { background: var(--warn-wash, var(--sunken)); color: var(--warn); }
+.chip-s.new { background: var(--accent-wash); color: var(--accent); margin-right: 6px; }
+ul.changes { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+ul.changes li .where { margin-left: 6px; font-size: 12.5px; }

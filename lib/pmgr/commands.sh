@@ -26,6 +26,7 @@ Health
   oncall                  Datadog: open pages, active incidents, alerting monitors (needs Pup)
   security                Internet exposure by environment: security groups, load balancers, public services
   diagnose NAME           Logs, events and describe output for a finding (matches its resource or message)
+  changes                 What's new, fixed, or not checked since the run before the last one
 
 Argo CD
   pf argo CLUSTER|--all   Port-forward to Argo CD on a stable local port and open it
@@ -51,6 +52,11 @@ EOF
 # sweep AREA... : run the senses for these areas, leaving results in $PMGR_TMP.
 # Filters come from SWEEP_CLUSTERS and SWEEP_REPOS (newline-separated names).
 sweep() {
+  # Which areas this run covers, so history compares it only with runs that covered the same.
+  local w
+  PMGR_AREAS=""
+  for w in "$@"; do jq -e --arg w "$w" 'has($w)' <<<"$HISTORY_AREAS" >/dev/null && PMGR_AREAS="$PMGR_AREAS $w"; done
+  export PMGR_AREAS
   : >"$PMGR_TMP/findings.jsonl"
   : >"$PMGR_TMP/usage.jsonl"
   : >"$PMGR_TMP/unseen.txt"
@@ -89,8 +95,7 @@ sweep() {
 # emit FORMAT OUT ALL : render the report and return the exit code.
 emit() {
   local format=$1 outfile=$2 all=$3 report text
-  report=$(report_build)
-  save_last_report "$report"
+  report=$(report_finalize "$(report_build)")
   case $format in
     text) report_text "$report" "$all" ;;
     json | md | html)
@@ -352,6 +357,11 @@ main() {
     oncall) cmd_report "oncall" --all "$@" ;;
     security) cmd_report "security" --all "$@" ;;
     diagnose) cmd_diagnose "$@" ;;
+    changes)
+      f="${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/last-report.json"
+      [ -f "$f" ] || die "No report yet. Run pmgr doctor or pmgr ui first."
+      changes_text "$(cat "$f")"
+      ;;
     pf | port-forward) cmd_pf "$@" ;;
     __pf) # internal, for the ui server: start | stop | login one cluster's Argo CD tunnel, or status; prints JSON
       case ${1:?} in
@@ -375,8 +385,7 @@ main() {
     ui) cmd_ui "$@" ;;
     __render) # internal: one full sweep rendered as the live dashboard (used by the ui server)
       sweep access security posture workloads apps traffic lifecycle utilization oncall argo pipelines workflows
-      report=$(report_build)
-      save_last_report "$report"
+      report=$(report_finalize "$(report_build)")
       report_html "$report" live >"${1:?}"
       [ -z "${2:-}" ] || printf '%s\n' "$report" >"$2"
       ;;

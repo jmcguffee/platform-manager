@@ -23,5 +23,7 @@ def day: .[0:10] + "T00:00:00Z" | fromdateiso8601;
 def days_ago($now; $t): if $t == null then null else (($now - ($t | day)) / 86400 | floor) end;
 def days_left($now; $t): if $t == null then null else ((($t | day) - $now) / 86400 | floor) end;
 def money: . * 100 | round / 100;
+# Dollars with cents, the same on every jq build.
+def usd: (. * 100 | round) as $c | "\($c / 100 | floor).\($c % 100 | tostring | if length == 1 then "0" + . else . end)";
 def plural($n; $one; $many): "\($n) \(if $n == 1 then $one else $many end)";
 def names($n): if length <= $n then join(", ") else (.[0:$n] | join(", ")) + " and \(length - $n) more" end;

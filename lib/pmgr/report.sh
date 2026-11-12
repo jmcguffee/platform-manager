@@ -16,10 +16,11 @@ report_build() {
   metrics=$(cat "$PMGR_TMP/metrics.jsonl" 2>/dev/null | jq -cs .)
   jq -n --argjson findings "$findings" --argjson usage "$usage" --argjson unseen "${unseen:-[]}" \
     --argjson sources "${sources:-[]}" --argjson metrics "${metrics:-[]}" \
-    --argjson config "$PMGR_CONFIG_JSON" --arg pim "$(pim_url)" \
+    --argjson config "$PMGR_CONFIG_JSON" --arg pim "$(pim_url)" --arg areas "${PMGR_AREAS:-}" \
     --slurpfile clusters "$PMGR_TMP/clusters.json" --slurpfile accounts "$PMGR_TMP/accounts.json" '
     {
       generated_at: (now | todateiso8601),
+      areas: ($areas | split(" ") | map(select(. != ""))),
       settings: {
         lookback_days: ($config.github.lookback_days // 14),
         utilization_days: ($config.utilization.lookback_days // 14),
@@ -76,13 +77,17 @@ report_text() {
         | [range(0; 5) as $i | [$t[][$i] | length] | max] as $w
         | ($t[] | [range(0; 5) as $i | .[$i] | pad($w[$i])] | join("  ") | sub(" +$"; "")), ""
        else empty end),
+      (if .changes then .changes as $ch
+         | c("1"; "Since the last run: \($ch.new | length) new, \($ch.fixed | length) fixed\(if ($ch.unchecked | length) > 0 then ", \($ch.unchecked | length) not checked" else "" end)") + c("2"; "  (pmgr changes lists them)"), ""
+       else empty end),
+      ([.changes.new[]?.id]) as $new_ids |
       (if ($shown | length) == 0 then
          (if (.unseen | length) > 0 then c("33"; "No problems in what pmgr could check, but some things weren'"'"'t checked (listed below).")
           else c("32"; if $hidden > 0 then "No warnings or errors." else "No problems found." end) end)
        else empty end),
       ($shown | group_by(.area) | sort_by(.[0].area as $a | ["auth","oncall","security","identity","edge","data","compute","cluster","workload","apps","traffic","lifecycle","utilization","argo","pipeline","workflow"] | index($a))[]
         | c("1"; $titles[.[0].area] // .[0].area),
-          (.[] | "  \(c($colors[.severity]; $labels[.severity])) \(.resource): \(.message)",
+          (.[] | "  \(c($colors[.severity]; $labels[.severity])) \(if (.id as $i | $new_ids | index($i)) != null then c("1"; "NEW ") else "" end)\(.resource): \(.message)",
                  (if .fix != "" then "       fix: \(.fix)" else empty end),
                  (if .link != "" then "       \(c("4"; .link))" else empty end))),
       (if (.usage_minutes | length) > 0 then

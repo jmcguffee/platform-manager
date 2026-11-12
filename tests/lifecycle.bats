@@ -27,7 +27,7 @@ assess() {
 @test "extended support is a warning with what it costs and the upgrade path" {
   got=$(assess 1.32)
   f=$(jq -c 'select(.check == "eks.extended_support")' <<<"$got")
-  [[ "$(jq -r .message <<<"$f")" == *'Kubernetes 1.32, in extended support since 2026-03-23. That'"'"'s $0.6/hour instead of $0.1, about $365/month more, and extended support ends 2027-03-23'* ]]
+  [[ "$(jq -r .message <<<"$f")" == *'Kubernetes 1.32, in extended support since 2026-03-23. That'"'"'s $0.60/hour instead of $0.10, about $365/month more, and extended support ends 2027-03-23'* ]]
   [ "$(jq -r .savings_usd_month <<<"$f")" = 365 ]
   [[ "$(jq -r .fix <<<"$f")" == *"1.33 → 1.34 → 1.35"* ]]
   [ "$(jq -c 'select(.kind) | [.version, .status, .newest]' <<<"$got")" = '["1.32","EXTENDED_SUPPORT","1.35"]' ]

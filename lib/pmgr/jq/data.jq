@@ -163,6 +163,6 @@ include "posture";
       (select(($s.LastAccessedDate // null) != null and days_ago($in.now; $s.LastAccessedDate) > $cfg.unused_days)
        | $b + {check: "data.secret_unused", severity: "info",
            message: "Secret \($s.Name) hasn't been read in \(days_ago($in.now; $s.LastAccessedDate)) days",
-           fix: "Delete it if nothing needs it (it costs $\($cfg.secret_month) a month).", savings_usd_month: $cfg.secret_month})
+           fix: "Delete it if nothing needs it (it costs $\($cfg.secret_month | usd) a month).", savings_usd_month: $cfg.secret_month})
     ))
 )

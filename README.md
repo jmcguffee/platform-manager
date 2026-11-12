@@ -238,6 +238,15 @@ nowhere else, and report values are inserted as text, never as HTML.
 `pmgr ui --file` writes a static copy to `~/.cache/platform-manager/dashboard.html` instead,
 with no network access at all.
 
+## What changed
+
+Every run is kept (the last 90, readable only by you, in `~/.cache/platform-manager/history`) and
+compared with the last run that covered the same areas. The terminal report starts with a line like
+"Since the last run: 2 new, 3 fixed", new findings are marked NEW, and `pmgr changes` lists them.
+The dashboard's Overview has a "Since the last run" panel and tags new findings. A finding that
+disappeared because its account or cluster couldn't be read this time is listed as "not checked",
+never as fixed; a narrower run (say `pmgr lb`) is only compared on what it covered.
+
 ## App configuration
 
 `pmgr apps` (and the App config view) reads each Deployment, StatefulSet and DaemonSet outside system

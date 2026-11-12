@@ -51,7 +51,7 @@ include "posture";
   ( $in.addresses.Addresses // [] | .[] | select(.AssociationId == null) | . as $a
     | base("eip/\($a.PublicIp)"; null) + {check: "compute.eip_idle", severity: "info",
         message: "Elastic IP \($a.PublicIp)\(if ($a | tag("Name")) then " (\($a | tag("Name")))" else "" end) isn't attached to anything",
-        fix: "Release it if nothing needs that address (every public IPv4 address costs $\($cfg.ipv4_month) a month).",
+        fix: "Release it if nothing needs that address (every public IPv4 address costs $\($cfg.ipv4_month | usd) a month).",
         savings_usd_month: $cfg.ipv4_month}),
 
   # --- snapshots ------------------------------------------------------------------------------
