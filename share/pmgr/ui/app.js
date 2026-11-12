@@ -164,6 +164,37 @@ function linkLabel(f) {
   return f.link;
 }
 
+// ---------- Argo CD port-forwards ----------
+// Starts (or reuses) `kubectl port-forward svc/argocd-server` for a cluster on the pmgr ui server, then
+// opens Argo CD. The tab opens on the click itself, so pop-up blockers don't stop it.
+function argoButton(cluster) {
+  if (!app.live) return null;
+  app.pf = app.pf || {};
+  const state = app.pf[cluster] || {};
+  const wrap = h("span", { class: "pf" });
+  const b = h("button", { type: "button", class: "ghost diag-btn", disabled: state.loading }, state.loading ? "Opening…" : "Open Argo CD");
+  b.addEventListener("click", async () => {
+    const tab = window.open("about:blank", "_blank");
+    app.pf[cluster] = { loading: true };
+    wrap.replaceWith(argoButton(cluster));
+    try {
+      const r = await api("/api/portforward", "POST", { cluster });
+      if (r.error) throw new Error(r.error);
+      app.pf[cluster] = { url: r.url };
+      if (tab) tab.location.href = r.url;
+    } catch (e) {
+      if (tab) tab.close();
+      app.pf[cluster] = { error: e.message };
+    }
+    document.querySelectorAll(`[data-pf="${CSS.escape(cluster)}"]`).forEach((el) => el.replaceChildren(argoButton(cluster)));
+  });
+  wrap.append(b);
+  if (state.url) wrap.append(" ", h("a", { href: state.url, target: "_blank", rel: "noopener noreferrer" }, `${state.url} ↗`));
+  if (state.error) wrap.append(" ", h("span", { class: "pf-error" }, state.error));
+  return wrap;
+}
+function argoSlot(cluster) { return h("span", { "data-pf": cluster }, argoButton(cluster)); }
+
 // ---------- diagnose ----------
 // Runs the read-only commands you'd run by hand for this finding (describe, events, logs, the failing
 // job's log) on the pmgr ui server, and shows the output under the finding.
@@ -272,7 +303,8 @@ function chains() {
       h(
         "div",
         { class: "chain" },
-        h("div", { class: "chain-name" }, c.name, c.current ? h("span", { class: "here" }, " (current)") : null, h("small", {}, c.context)),
+        h("div", { class: "chain-name" }, c.name, c.current ? h("span", { class: "here" }, " (current)") : null, h("small", {}, c.context),
+          c.kubernetes === "ok" && app.live ? h("div", { class: "chain-actions" }, argoSlot(c.name)) : null),
         h(
           "div",
           { class: "links", role: "list", "aria-label": `Access chain for ${c.name}` },
@@ -933,6 +965,15 @@ function argo() {
   return [
     h("h2", { class: "verdict" }, hasErrors(list) ? "Some apps are failing." : "Argo CD apps are healthy."),
     h("p", { class: "verdict-sub" }, "Failed syncs, degraded apps, stuck operations, render errors, and apps that won't converge."),
+    h("section", { class: "panel" },
+      h("div", { class: "panel-head" }, h("h3", {}, "Environments"),
+        h("span", { class: "tally" }, app.live ? "Open Argo CD starts a port-forward on a stable local port" : "Open Argo CD works in pmgr ui")),
+      h("div", { class: "panel-body" }, h("dl", { class: "kv env-list" }, (app.report.clusters || []).map((c) => [
+        h("dt", {}, h("b", {}, c.name), h("span", { class: "muted" }, ` ${c.context}`)),
+        h("dd", {}, c.kubernetes === "ok"
+          ? (app.live ? argoSlot(c.name) : h("span", { class: "muted" }, "reachable"))
+          : h("span", { class: "chip-s off" }, (K8S_STATE[c.kubernetes] || ["", c.kubernetes])[1]))])))),
+    h("h2", {}, "Applications"),
     list.length
       ? grouped(list, (f) => f.resource.split("/")[0], () => true)
       : h("p", { class: "empty" }, `No Argo CD problems on ${reachable.map((c) => c.name).join(", ")}.`),

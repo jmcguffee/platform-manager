@@ -129,6 +129,11 @@ pmgr utilization            # over- and under-used databases, caches, Kafka and 
 pmgr oncall                 # Datadog pages, incidents and alerting monitors
 pmgr security               # internet exposure by environment
 pmgr diagnose checkout      # logs, events and describe output for a matching finding
+
+pmgr pf argo prod           # port-forward to Argo CD on prod (stable local port) and open it
+pmgr pf argo --all          # every environment
+pmgr pf                     # list them (running or stopped)
+pmgr pf stop all            # stop them
 pmgr argo                   # Argo CD health on every reachable cluster
 pmgr pipelines              # pipeline failures and workflow gaps
 pmgr doctor                 # everything, in the terminal
@@ -172,6 +177,11 @@ the finding, each with the exact command:
 - failing pipelines: the run's jobs and steps, and each failed job's log
 - security groups: the rules and what's attached; load balancers: listeners and groups
 - AWS sessions: the full error and how the profile is set up; Datadog monitors: their state
+
+The Argo CD view (and each access chain) has an **Open Argo CD** button per environment: it starts
+or reuses `kubectl port-forward svc/argocd-server` for that cluster on a stable local port (8080,
+8081, … in config order, or `argocd_port`) and opens it. Port-forwards keep running until you stop
+them with `pmgr pf stop`; if your SSO session expires they stop, and opening again restarts them.
 
 The browser sends only a finding's id; what to inspect comes from pmgr's own report. From the
 terminal, `pmgr diagnose checkout` does the same for the finding that matches.

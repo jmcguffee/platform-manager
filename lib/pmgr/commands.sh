@@ -21,6 +21,11 @@ Health
   oncall                  Datadog: open pages, active incidents, alerting monitors (needs Pup)
   security                Internet exposure by environment: security groups, load balancers, public services
   diagnose NAME           Logs, events and describe output for a finding (matches its resource or message)
+
+Argo CD
+  pf argo CLUSTER|--all   Port-forward to Argo CD on a stable local port and open it
+  pf                      List port-forwards (running or stopped)
+  pf stop [CLUSTER|all]   Stop port-forwards
   pipelines [--repo R]    Pipeline failures, flakiness, slowness, and workflow gaps
   doctor                  Everything above
   ui [--file]             Open the dashboard, with a Sync now button (--file: a static page)
@@ -334,6 +339,10 @@ main() {
     oncall) cmd_report "oncall" --all "$@" ;;
     security) cmd_report "security" --all "$@" ;;
     diagnose) cmd_diagnose "$@" ;;
+    pf | port-forward) cmd_pf "$@" ;;
+    __pf) # internal: start (or reuse) one cluster's Argo CD port-forward for the ui server; prints JSON
+      pf_start "${1:?}" || true
+      ;;
     __diagnose) # internal: diagnose one finding of the ui server's report by id; prints a JSON array
       jq -c --arg id "${1:?}" '[.findings[] | select(.id == $id)] | first | .diag // empty' "$SERVE_DIR/report.json" >"$PMGR_TMP/diag.json"
       if [ -s "$PMGR_TMP/diag.json" ]; then diagnose_finding "$(cat "$PMGR_TMP/diag.json")" | jq -cs .; else printf '[]\n'; fi

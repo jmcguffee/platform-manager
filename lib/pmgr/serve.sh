@@ -9,7 +9,8 @@
 #   - The Host header must be this exact address, which blocks DNS rebinding from websites.
 #   - No CORS headers, so other sites can't read responses. Syncing needs a POST with the token
 #     header, which a cross-site form can't send.
-#   - The only action is "run the checks again". Nothing writes to AWS, Kubernetes or GitHub.
+#   - Actions: run the checks again, diagnose a finding, and open a port-forward to Argo CD. None of them
+#     write to AWS, Kubernetes or GitHub; a port-forward is a local tunnel.
 
 serve_token() {
   if command -v openssl >/dev/null 2>&1; then openssl rand -hex 16
@@ -119,6 +120,17 @@ serve_handle() {
         id=$(jq -r '.id // ""' <<<"$body" 2>/dev/null | tr -cd 'a-z0-9')
         "$PMGR_ROOT/bin/pmgr" __diagnose "${id:-none}" >"$SERVE_DIR/diag.json" 2>/dev/null || printf '[]' >"$SERVE_DIR/diag.json"
         serve_respond "200 OK" "application/json" "$SERVE_DIR/diag.json"
+      fi ;;
+    "POST /api/portforward")
+      if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
+        serve_text "403 Forbidden" "Port-forwarding needs the token header."
+      else
+        # Only a cluster name from the browser; pf_start refuses names that aren't in the config.
+        local cluster
+        cluster=$(jq -r '.cluster // ""' <<<"$body" 2>/dev/null | tr -cd 'A-Za-z0-9._-')
+        "$PMGR_ROOT/bin/pmgr" __pf "${cluster:-none}" >"$SERVE_DIR/pf.json" 2>/dev/null </dev/null
+        [ -s "$SERVE_DIR/pf.json" ] || printf '{"error": "The port-forward didn'"'"'t start."}' >"$SERVE_DIR/pf.json"
+        serve_respond "200 OK" "application/json" "$SERVE_DIR/pf.json"
       fi ;;
     "POST /api/sync")
       if [ "$token_hdr" != "$SERVE_TOKEN" ]; then

@@ -23,6 +23,9 @@ clusters:
     aws_profile: staging-platform
     expected_role: PlatformAdmin          # part of the assumed-role ARN
     pim_group: AWS-Staging-PlatformAdmin  # shown in hints so you know what to activate
+    # argocd_namespace: argocd          # where Argo CD runs (for the Argo check and `pmgr pf argo`)
+    # argocd_service: argocd-server     # the service `pmgr pf argo` forwards to
+    # argocd_port: 8080                 # stable local port; default 8080 + the cluster's position
   - name: prod
     context: arn:aws:eks:us-east-1:222222222222:cluster/prod
     aws_profile: prod-platform
