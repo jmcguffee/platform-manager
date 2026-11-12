@@ -121,15 +121,20 @@ serve_handle() {
         "$PMGR_ROOT/bin/pmgr" __diagnose "${id:-none}" >"$SERVE_DIR/diag.json" 2>/dev/null || printf '[]' >"$SERVE_DIR/diag.json"
         serve_respond "200 OK" "application/json" "$SERVE_DIR/diag.json"
       fi ;;
-    "POST /api/portforward")
+    "GET /api/portforward")
+      "$PMGR_ROOT/bin/pmgr" __pf status >"$SERVE_DIR/pf.json" 2>/dev/null </dev/null || printf '[]' >"$SERVE_DIR/pf.json"
+      serve_respond "200 OK" "application/json" "$SERVE_DIR/pf.json" ;;
+    "POST /api/portforward" | "POST /api/portforward/stop" | "POST /api/argo-login")
       if [ "$token_hdr" != "$SERVE_TOKEN" ]; then
         serve_text "403 Forbidden" "Port-forwarding needs the token header."
       else
-        # Only a cluster name from the browser; pf_start refuses names that aren't in the config.
-        local cluster
+        # Only a cluster name from the browser; pmgr refuses names that aren't in the config. The
+        # login route copies the password to this machine's clipboard and answers without it.
+        local cluster action=start
+        case $path in */stop) action=stop ;; */argo-login) action=login ;; esac
         cluster=$(jq -r '.cluster // ""' <<<"$body" 2>/dev/null | tr -cd 'A-Za-z0-9._-')
-        "$PMGR_ROOT/bin/pmgr" __pf "${cluster:-none}" >"$SERVE_DIR/pf.json" 2>/dev/null </dev/null
-        [ -s "$SERVE_DIR/pf.json" ] || printf '{"error": "The port-forward didn'"'"'t start."}' >"$SERVE_DIR/pf.json"
+        "$PMGR_ROOT/bin/pmgr" __pf "$action" "${cluster:-none}" >"$SERVE_DIR/pf.json" 2>/dev/null </dev/null
+        [ -s "$SERVE_DIR/pf.json" ] || printf '{"error": "pmgr didn'"'"'t answer."}' >"$SERVE_DIR/pf.json"
         serve_respond "200 OK" "application/json" "$SERVE_DIR/pf.json"
       fi ;;
     "POST /api/sync")
@@ -191,7 +196,8 @@ serve_ui() {
 # whole session, reads each request with a timeout (so an idle browser connection can't stall
 # anything), and hands the raw request to `pmgr __handle`, which answers it in bash.
 serve_loop_perl() {
-  PMGR_HANDLER="$PMGR_ROOT/bin/pmgr" perl -MIO::Socket::INET -MIPC::Open2 -e '
+  # exec, so the pid serve_ui tracks (and kills on Ctrl+C or TERM) is the listener itself.
+  PMGR_HANDLER="$PMGR_ROOT/bin/pmgr" exec perl -MIO::Socket::INET -MIPC::Open2 -e '
     use strict; use warnings;
     my $srv = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $ARGV[0], Listen => 32, ReuseAddr => 1)
       or die "pmgr: can'"'"'t listen on 127.0.0.1:$ARGV[0]: $!\n";

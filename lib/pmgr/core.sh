@@ -69,7 +69,8 @@ config_load() {
       | if ($bad | length) > 0 then "\($where): unknown keys \($bad | join(", "))" else empty end;
     [
       (.clusters // [] | to_entries[] | .key as $i | .value
-        | keys_ok(["name","context","aws_profile","expected_role","pim_group","region","eks_cluster","argocd_namespace","argocd_service","argocd_port"];
+        | keys_ok(["name","context","aws_profile","expected_role","pim_group","region","eks_cluster","argocd_namespace","argocd_service","argocd_port",
+                   "argocd_secret","argocd_secret_key","argocd_secret_profile","argocd_username"];
                   "clusters[\($i)]"),
           (if (.name // "") == "" or (.context // "") == "" or (.aws_profile // "") == ""
            then "clusters[\($i)]: name, context and aws_profile are required" else empty end)),

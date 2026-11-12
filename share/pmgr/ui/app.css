@@ -306,4 +306,13 @@ section.repo .findings { margin-top: 10px; }
 .pf { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pf a { font-size: 12.5px; }
 .pf-error { color: var(--bad); font-size: 12.5px; }
+.pf-ok { color: var(--ok); font-size: 12.5px; margin-top: 4px; }
+td .pf-error { margin-top: 4px; }
+.small { font-size: 12px; }
+button.btn-sm { padding: 4px 10px; }
+td > .pf { gap: 6px; }
+td > .pf button, td > .pf a { white-space: nowrap; }
+td .pf-ok, td .pf-error { max-width: 32ch; }
+a.button-link { padding: 4px 10px; border: 1px solid var(--rule-2); border-radius: inherit; text-decoration: none; font-size: 13px; }
+a.button-link:hover { border-color: var(--accent); background: var(--accent-wash); }
 .env-list dd { font-weight: 400; }

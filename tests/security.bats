@@ -95,6 +95,8 @@ PRD_LB='[{"LoadBalancerArn": "arn:lb/prd", "LoadBalancerName": "prd-public", "DN
   [ "$(jq -r 'select(.check == "security.public_database") | .severity' <<<"$got")" = error ]   # public DB is wrong even in prd
   [ -z "$(jq -r 'select(.check == "security.public_eks_api") | select(.message | contains("prd-eks"))' <<<"$got")" ]   # limited CIDRs are fine
   [[ "$(jq -r 'select(.check == "security.public_instance") | .message' <<<"$got")" == *"bastion"*"in dev"* ]]
+  # Each can be diagnosed: the describe call for that resource.
+  [ "$(jq -r 'select(has("diag")) | "\(.diag.type)=\(.diag.id)"' <<<"$got" | sort | tr '\n' ' ')" = "ec2=i-1 eks=dev-eks msk=events rds=orders " ]
 }
 
 @test "S3 Block Public Access: any setting off is flagged" {

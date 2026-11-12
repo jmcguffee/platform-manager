@@ -30,6 +30,7 @@ rds() { jq -cn --arg id "$1" --arg class "$2" --arg engine "${3:-postgres}" --ar
   [ "$(jq -r .check <<<"$got")" = rds.oversized ]
   [[ "$(jq -r .fix <<<"$got")" == *"db.r6g.xlarge"* ]]
   [ "$(jq -r .resource <<<"$got")" = "acct/rds/orders (db.r6g.2xlarge)" ]
+  [ "$(jq -r '"\(.diag.type)=\(.diag.id)"' <<<"$got")" = "rds=orders" ]
 }
 
 @test "the smallest burstable size isn't called oversized" {
@@ -115,6 +116,7 @@ podj() { # name owner-rs cpu-request mem-request [mem-limit]
     '{nodes: {items: [$n1, $n2]}, pods: {items: [$p]}, podmetrics: null, nodemetrics: null}' | eks)
   [ "$(jq -r .check <<<"$got")" = eks.overprovisioned ]
   [[ "$(jq -r .message <<<"$got")" == *"6% of CPU and 3% of memory across 2 nodes"* ]]
+  [ "$(jq -c .diag <<<"$got")" = '{"type":"capacity","cluster":"prod"}' ]
 }
 
 @test "EKS: a nearly full cluster" {

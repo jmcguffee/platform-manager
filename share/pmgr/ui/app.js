@@ -195,6 +195,79 @@ function argoButton(cluster) {
 }
 function argoSlot(cluster) { return h("span", { "data-pf": cluster }, argoButton(cluster)); }
 
+// One row per environment: whether its tunnel is running, the local port it's on (or will use next),
+// and buttons to create it, open Argo CD, copy the login password and stop it. The password is read
+// from AWS Secrets Manager and copied to the clipboard by pmgr ui; it never reaches this page.
+app.tunnelBusy = {};
+app.tunnelNote = {};
+function refreshTunnels() {
+  if (!app.live) return;
+  api("/api/portforward")
+    .then((r) => { app.tunnels = r; app.tunnelError = ""; })
+    .catch((e) => { app.tunnelError = e.message; })
+    .finally(drawTunnels);
+}
+function drawTunnels() {
+  const el = document.getElementById("tunnels");
+  if (el) el.replaceChildren(...tunnelTable().filter(Boolean));
+}
+async function tunnelAction(name, action) {
+  app.tunnelBusy[name] = action;
+  app.tunnelNote[name] = null;
+  drawTunnels();
+  try {
+    const path = { start: "/api/portforward", stop: "/api/portforward/stop", login: "/api/argo-login" }[action];
+    const r = await api(path, "POST", { cluster: name });
+    if (r.error) throw new Error(r.error);
+    if (action === "login") app.tunnelNote[name] = { ok: `Password for ${r.username} copied. It clears from the clipboard in ${r.clears_in}s.` };
+    if (action === "start") app.tunnelNote[name] = { ok: r.reused ? "Already running." : `Tunnel up on port ${r.port}.` };
+    if (action === "stop") app.tunnels = r;
+    app.pf = {};
+  } catch (e) {
+    app.tunnelNote[name] = { error: e.message };
+  }
+  app.tunnelBusy[name] = null;
+  if (action === "stop") drawTunnels(); else refreshTunnels();
+}
+function tunnelTable() {
+  const status = Object.fromEntries((app.tunnels || []).map((t) => [t.name, t]));
+  const rows = (app.report.clusters || []).map((c) => {
+    const t = status[c.name];
+    const busy = app.tunnelBusy[c.name];
+    const note = app.tunnelNote[c.name];
+    const reachable = c.kubernetes === "ok";
+    const btn = (label, action, cls = "ghost diag-btn") => {
+      const b = h("button", { type: "button", class: cls, disabled: !!busy }, busy === action ? `${label}…` : label);
+      b.addEventListener("click", () => tunnelAction(c.name, action));
+      return b;
+    };
+    const port = !t ? h("span", { class: "muted" }, app.live ? "…" : "–")
+      : t.alive ? h("a", { href: t.url, target: "_blank", rel: "noopener noreferrer" }, `localhost:${t.port}`)
+      : h("span", { title: t.fixed ? "argocd_port in your config" : "Last port used, else 8080 + the cluster's position. If it's taken, a free port is picked." },
+          String(t.port), h("span", { class: "muted" }, t.fixed ? " fixed" : " auto"));
+    const actions = !app.live ? h("span", { class: "muted" }, "in pmgr ui")
+      : !t ? null
+      : t.alive ? h("span", { class: "pf" },
+          h("a", { class: "button-link", href: t.url, target: "_blank", rel: "noopener noreferrer" }, "Open Argo CD"),
+          t.login ? btn("Copy password", "login") : null,
+          btn("Stop", "stop"))
+      : h("span", { class: "pf" }, btn("Create tunnel", "start", reachable ? "primary btn-sm" : "ghost diag-btn"), t.login ? btn("Copy password", "login") : null);
+    return h("tr", { class: t && t.alive ? "row-now" : "" },
+      h("td", {}, h("b", {}, c.name), h("div", { class: "muted small" }, c.context)),
+      h("td", {}, reachable ? h("span", { class: "chip-s ok" }, "reachable") : h("span", { class: "chip-s off", title: "At the last sync. Renewed your session since? Create tunnel tries anyway." }, (K8S_STATE[c.kubernetes] || ["", c.kubernetes])[1])),
+      h("td", {}, !t ? "" : t.alive ? h("span", { class: "chip-s ok" }, "running") : h("span", { class: "chip-s off" }, "off")),
+      h("td", { class: "n" }, port),
+      h("td", {}, !t ? "" : t.login ? (t.username || "from secret") : h("span", { class: "muted" }, "add argocd_secret")),
+      h("td", {}, actions,
+        note && note.ok ? h("div", { class: "pf-ok" }, note.ok) : null,
+        note && note.error ? h("div", { class: "pf-error" }, note.error) : null));
+  });
+  return [
+    app.tunnelError ? h("p", { class: "pf-error" }, app.tunnelError) : null,
+    table([["Environment"], ["Cluster"], ["Tunnel"], ["Local port", true], ["Login"], [""]], rows),
+  ];
+}
+
 // ---------- diagnose ----------
 // Runs the read-only commands you'd run by hand for this finding (describe, events, logs, the failing
 // job's log) on the pmgr ui server, and shows the output under the finding.
@@ -956,28 +1029,22 @@ function workflows() {
 function argo() {
   const list = inView("argo");
   const reachable = (app.report.clusters || []).filter((c) => c.kubernetes === "ok");
-  if (!reachable.length) {
-    return [
-      h("h2", { class: "verdict" }, "No Argo CD to read."),
-      h("p", { class: "verdict-sub" }, "pmgr reads Argo CD Applications from clusters it can reach, and none are reachable right now. The Access view shows what's in the way."),
-    ];
-  }
   return [
-    h("h2", { class: "verdict" }, hasErrors(list) ? "Some apps are failing." : "Argo CD apps are healthy."),
-    h("p", { class: "verdict-sub" }, "Failed syncs, degraded apps, stuck operations, render errors, and apps that won't converge."),
-    h("section", { class: "panel" },
+    reachable.length
+      ? [h("h2", { class: "verdict" }, hasErrors(list) ? "Some apps are failing." : "Argo CD apps are healthy."),
+         h("p", { class: "verdict-sub" }, "Failed syncs, degraded apps, stuck operations, render errors, and apps that won't converge.")]
+      : [h("h2", { class: "verdict" }, "No Argo CD to read."),
+         h("p", { class: "verdict-sub" }, "pmgr reads Argo CD Applications from clusters it can reach, and none were reachable at the last sync. The Access view shows what's in the way.")],
+    (app.report.clusters || []).length === 0 ? null : h("section", { class: "panel" },
       h("div", { class: "panel-head" }, h("h3", {}, "Environments"),
-        h("span", { class: "tally" }, app.live ? "Open Argo CD starts a port-forward on a stable local port" : "Open Argo CD works in pmgr ui")),
-      h("div", { class: "panel-body" }, h("dl", { class: "kv env-list" }, (app.report.clusters || []).map((c) => [
-        h("dt", {}, h("b", {}, c.name), h("span", { class: "muted" }, ` ${c.context}`)),
-        h("dd", {}, c.kubernetes === "ok"
-          ? (app.live ? argoSlot(c.name) : h("span", { class: "muted" }, "reachable"))
-          : h("span", { class: "chip-s off" }, (K8S_STATE[c.kubernetes] || ["", c.kubernetes])[1]))])))),
-    h("h2", {}, "Applications"),
-    list.length
-      ? grouped(list, (f) => f.resource.split("/")[0], () => true)
-      : h("p", { class: "empty" }, `No Argo CD problems on ${reachable.map((c) => c.name).join(", ")}.`),
-    unseenNote(),
+        h("span", { class: "tally" }, app.live ? "Tunnels are kubectl port-forwards on this machine, read-only to the cluster" : "Tunnels work in pmgr ui")),
+      h("div", { id: "tunnels" }, (setTimeout(refreshTunnels, 0), tunnelTable()))),
+    reachable.length ? [
+      h("h2", {}, "Applications"),
+      list.length
+        ? grouped(list, (f) => f.resource.split("/")[0], () => true)
+        : h("p", { class: "empty" }, `No Argo CD problems on ${reachable.map((c) => c.name).join(", ")}.`),
+      unseenNote()] : null,
   ];
 }
 

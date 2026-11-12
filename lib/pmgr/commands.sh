@@ -340,8 +340,13 @@ main() {
     security) cmd_report "security" --all "$@" ;;
     diagnose) cmd_diagnose "$@" ;;
     pf | port-forward) cmd_pf "$@" ;;
-    __pf) # internal: start (or reuse) one cluster's Argo CD port-forward for the ui server; prints JSON
-      pf_start "${1:?}" || true
+    __pf) # internal, for the ui server: start | stop | login one cluster's Argo CD tunnel, or status; prints JSON
+      case ${1:?} in
+        start) pf_start "${2:?}" || true ;;
+        stop) pf_stop "${2:?}"; pf_status ;;
+        login) pf_login "${2:?}" || true ;;
+        status) pf_status ;;
+      esac
       ;;
     __diagnose) # internal: diagnose one finding of the ui server's report by id; prints a JSON array
       jq -c --arg id "${1:?}" '[.findings[] | select(.id == $id)] | first | .diag // empty' "$SERVE_DIR/report.json" >"$PMGR_TMP/diag.json"

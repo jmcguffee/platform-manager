@@ -46,7 +46,8 @@ tells you the fix. `pmgr ui` shows everything as a dashboard in your browser.
   that never render their manifests.
 
 It's read-only. It never changes your clusters, AWS accounts or repositories.
-The only thing it changes is your kubectl context, when you run `pmgr use`.
+The only things it changes are your kubectl context, when you run `pmgr use`, and local
+port-forwards you start with **Create tunnel** or `pmgr pf`.
 
 ## Install
 
@@ -178,10 +179,34 @@ the finding, each with the exact command:
 - security groups: the rules and what's attached; load balancers: listeners and groups
 - AWS sessions: the full error and how the profile is set up; Datadog monitors: their state
 
-The Argo CD view (and each access chain) has an **Open Argo CD** button per environment: it starts
-or reuses `kubectl port-forward svc/argocd-server` for that cluster on a stable local port (8080,
-8081, … in config order, or `argocd_port`) and opens it. Port-forwards keep running until you stop
-them with `pmgr pf stop`; if your SSO session expires they stop, and opening again restarts them.
+- workflow gaps: the workflow file itself; flaky, queued or slow workflows: their last 15 runs
+- RDS, Redshift, ElastiCache, MSK, EC2 and EKS findings (utilization and security): the describe
+  call for that resource and its last day of events; EKS capacity: `kubectl top nodes` and the nodes
+- a cluster pmgr can't reach: what EKS says about it, its node groups, your kubeconfig entry, and
+  whether its endpoint resolves (a private endpoint only resolves on VPN)
+- Datadog pages and incidents: the page or incident itself
+
+### Argo CD tunnels
+
+The Argo CD view has an **Environments** table: one row per cluster with its tunnel status, the local
+port, and **Create tunnel**, **Open Argo CD**, **Copy password** and **Stop** buttons. A tunnel is
+`kubectl port-forward svc/argocd-server` on 127.0.0.1, run with the cluster's AWS profile; it keeps
+running after you close the dashboard, until you stop it (or your SSO session expires).
+
+Ports: `argocd_port` fixes one. Otherwise pmgr reuses the port it used last time, else 8080, 8081, …
+in config order, and if that one is taken, a free port the OS picks.
+
+Login: set `argocd_secret` on the cluster to the Secrets Manager secret holding the admin password
+(plain text, or JSON with `argocd_secret_key`, default `password`). **Copy password** reads it with
+your SSO session and puts it on your clipboard, cleared after 60 seconds. It never goes to the
+browser, the report, a log or the terminal.
+
+```bash
+pmgr pf status            # every environment, its port, and whether a login is configured
+pmgr pf argo dev          # create (or reuse) the tunnel, copy the password, open Argo CD
+pmgr pf login dev         # just copy the password
+pmgr pf stop all
+```
 
 The browser sends only a finding's id; what to inspect comes from pmgr's own report. From the
 terminal, `pmgr diagnose checkout` does the same for the finding that matches.
@@ -256,6 +281,10 @@ is the seam for what comes next:
 - Read-only GitHub access (GET requests only) through your existing `gh` login.
 - Credentials never leave the AWS CLI. For credentials with a real expiry, `pmgr`
   reads only the `Expiration` field and discards the rest.
+- The only secret it reads is the `argocd_secret` you configure, and only when you ask for
+  it. The value goes through pipes to the clipboard (cleared after 60 seconds); it never
+  appears in a command line, file, log, report, terminal output or the browser.
+- Tunnels listen on 127.0.0.1 only.
 - Temp files go in a private directory that's removed on exit.
 - CI runs ShellCheck and the test suite on macOS, with every action pinned to a
   commit SHA.

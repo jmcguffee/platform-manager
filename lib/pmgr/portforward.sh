@@ -1,9 +1,15 @@
 # shellcheck shell=bash
-# Port-forwards to Argo CD, one per cluster, on a stable local port.
+# Port-forwards to Argo CD, one per cluster, and its login from AWS Secrets Manager.
 #
 # `pmgr pf argo prod` runs `kubectl port-forward svc/argocd-server` for that cluster's context and
 # AWS profile, remembers it, and opens Argo in your browser. Nothing in the cluster changes: it's a
 # local tunnel through the API server (so a private endpoint still needs VPN).
+#
+# Ports: argocd_port is fixed. Otherwise the port it used last time, else 8080 + the cluster's
+# position, and if that one is taken, a free port the OS picks.
+#
+# Login: argocd_secret names a Secrets Manager secret (plain text, or JSON with a password key).
+# The password goes to the clipboard and nowhere else: not stdout, the report, the logs or the browser.
 
 pf_dir() { printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/pf"; }
 
@@ -11,6 +17,23 @@ pf_dir() { printf '%s' "${XDG_CACHE_HOME:-$HOME/.cache}/platform-manager/pf"; }
 pf_port() {
   jq -r --arg n "$1" '(.clusters // []) as $c | ([$c | to_entries[] | select(.value.name == $n)] | first) as $e
     | if $e == null then empty else ($e.value.argocd_port // (8080 + $e.key)) end' <<<"$PMGR_CONFIG_JSON"
+}
+
+pf_fixed_port() { # NAME : argocd_port if the config sets one
+  jq -r --arg n "$1" '[.clusters // [] | .[] | select(.name == $n)] | first | .argocd_port // empty' <<<"$PMGR_CONFIG_JSON"
+}
+
+pf_free_port() { # a port nothing is listening on, picked by the OS
+  perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(Listen => 1, LocalAddr => "127.0.0.1", LocalPort => 0) or exit 1; print $s->sockport'
+}
+
+# The port a cluster's tunnel will use if started now: fixed, else last used, else 8080 + position.
+pf_planned_port() {
+  local fixed last
+  fixed=$(pf_fixed_port "$1")
+  [ -z "$fixed" ] || { printf '%s' "$fixed"; return; }
+  last=$(tr -cd 0-9 <"$(pf_dir)/$1.port" 2>/dev/null)
+  if [ -n "$last" ]; then printf '%s' "$last"; else pf_port "$1"; fi
 }
 
 pf_alive() { # NAME : 0 if its port-forward process is still running
@@ -32,7 +55,6 @@ pf_start() {
   fi
   ctx=$(jq -r .context <<<"$c") profile=$(jq -r .aws_profile <<<"$c")
   ns=$(jq -r '.argocd_namespace // "argocd"' <<<"$c") svc=$(jq -r '.argocd_service // "argocd-server"' <<<"$c")
-  port=$(pf_port "$name")
   key="pf-$(safe_key "$name")"
 
   # Use the service's https port if it has one (443), else http (80, for server.insecure).
@@ -49,10 +71,14 @@ pf_start() {
     | if $s then "\($s.p) https" elif $h then "\($h.p) http" elif ($ports | length) > 0 then "\($ports[0].p) http" else "" end')
   [ -n "$remote" ] || { jq -cn --arg svc "$svc" '{error: "Service \($svc) has no TCP port to forward."}'; return 1; }
 
+  port=$(pf_planned_port "$name")
   if port_open "$port"; then
-    jq -cn --arg port "$port" --arg name "$name" \
-      '{error: "Local port \($port) for \($name) is already in use by something else. Set argocd_port for this cluster in your config."}'
-    return 1
+    if [ -n "$(pf_fixed_port "$name")" ]; then
+      jq -cn --arg port "$port" --arg name "$name" \
+        '{error: "Local port \($port) (argocd_port for \($name)) is already in use by something else. Free it, or remove argocd_port so pmgr picks an open one."}'
+      return 1
+    fi
+    port=$(pf_free_port) || { printf '{"error": "Couldn'"'"'t find a free local port."}\n'; return 1; }
   fi
   log="$dir/$name.log"
   # nohup + setsid-like detach: the tunnel outlives this command (stop it with pmgr pf stop).
@@ -70,6 +96,86 @@ pf_start() {
     --arg ns "$ns" --argjson port "$port" \
     '{name: $name, url: $url, pid: $pid, port: $port, context: $ctx, target: "\($ns)/svc/\($svc)", started_at: (now | todateiso8601), reused: false}' \
     | tee "$dir/$name.json"
+  printf '%s\n' "$port" >"$dir/$name.port"
+}
+
+# pf_status : every configured cluster's tunnel: running or not, its port (or the one it will use),
+# and whether a login secret is configured. The dashboard's Environments table reads this.
+pf_status() {
+  local out="[]" name state alive
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    state='{}'
+    alive=false
+    if pf_alive "$name"; then alive=true; state=$(cat "$(pf_dir)/$name.json"); fi
+    out=$(jq -c --arg n "$name" --argjson s "$state" --argjson alive "$alive" --arg planned "$(pf_planned_port "$name")" \
+      --argjson c "$(diag_cluster "$name")" \
+      '. + [{name: $n, alive: $alive, url: ($s.url // null), port: ($s.port // ($planned | tonumber)),
+             fixed: ($c.argocd_port != null), login: (($c.argocd_secret // "") != ""),
+             username: ($c.argocd_username // null)}]' <<<"$out")
+  done < <(cfg '.clusters // [] | .[].name')
+  printf '%s\n' "$out"
+}
+
+# ---------- login ----------
+
+# clip_copy : copy stdin to the clipboard (PMGR_CLIPBOARD overrides the command, for tests).
+clip_copy() {
+  if [ -n "${PMGR_CLIPBOARD:-}" ]; then "$PMGR_CLIPBOARD"
+  elif command -v pbcopy >/dev/null 2>&1; then pbcopy
+  elif command -v wl-copy >/dev/null 2>&1; then wl-copy
+  elif command -v xclip >/dev/null 2>&1; then xclip -selection clipboard
+  else return 1
+  fi
+}
+
+PF_CLIP_SECONDS=60
+
+# pf_login NAME : copy the cluster's Argo CD password to the clipboard. Prints {name, username,
+# copied, clears_in} or {error}; the password itself is never printed.
+pf_login() {
+  local name=$1 c sid key profile region raw pw user errf
+  c=$(diag_cluster "$name")
+  [ -n "$c" ] || { jq -cn --arg n "$name" '{error: "No cluster named \($n) in your config."}'; return 1; }
+  sid=$(jq -r '.argocd_secret // ""' <<<"$c")
+  [ -n "$sid" ] || { jq -cn --arg n "$name" '{error: "No argocd_secret for \($n). Add the Secrets Manager secret name under that cluster in your config."}'; return 1; }
+  key=$(jq -r '.argocd_secret_key // "password"' <<<"$c")
+  profile=$(jq -r '.argocd_secret_profile // .aws_profile' <<<"$c")
+  region=$(jq -r '.region // ""' <<<"$c")
+  errf="$PMGR_TMP/pf-login.err"
+  # The value stays in this function's memory and goes out through pipes only (printf is a builtin,
+  # so it never shows up in a process listing).
+  if ! raw=$(AWS_PROFILE="$profile" aws secretsmanager get-secret-value --secret-id "$sid" ${region:+--region "$region"} \
+      --query SecretString --output text 2>"$errf"); then
+    jq -cn --arg e "$(first_line "$(cat "$errf")")" --arg sid "$sid" --arg p "$profile" \
+      '{error: "Can'"'"'t read secret \($sid) with profile \($p): \($e)"}'
+    return 1
+  fi
+  # JSON secrets: take the configured key (password by default). Anything else is the password itself.
+  if pw=$(printf '%s' "$raw" | jq -er --arg k "$key" 'if type == "object" then .[$k] // empty | tostring else error end' 2>/dev/null); then
+    user=$(jq -r '.argocd_username // empty' <<<"$c")
+    [ -n "$user" ] || user=$(printf '%s' "$raw" | jq -r '.username // "admin"')
+  elif printf '%s' "$raw" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    jq -cn --arg sid "$sid" --arg k "$key" '{error: "Secret \($sid) is JSON but has no \($k) key. Set argocd_secret_key to the key that holds the password."}'
+    return 1
+  else
+    pw=$raw
+    user=$(jq -r '.argocd_username // "admin"' <<<"$c")
+  fi
+  [ -n "$pw" ] || { jq -cn --arg sid "$sid" '{error: "Secret \($sid) is empty."}'; return 1; }
+  if ! printf '%s' "$pw" | clip_copy; then
+    printf '{"error": "No clipboard command found (pbcopy, wl-copy or xclip)."}\n'
+    return 1
+  fi
+  # Clear it after a minute, unless something else has been copied since.
+  if [ -z "${PMGR_CLIPBOARD:-}" ] && command -v pbpaste >/dev/null 2>&1; then
+    local sum
+    sum=$(printf '%s' "$pw" | shasum -a 256)
+    ( sleep "$PF_CLIP_SECONDS"; [ "$(pbpaste | shasum -a 256)" = "$sum" ] && printf '' | pbcopy ) \
+      </dev/null >/dev/null 2>&1 3>&- &
+  fi
+  jq -cn --arg n "$name" --arg u "$user" --argjson s "$PF_CLIP_SECONDS" \
+    '{name: $n, username: $u, copied: true, clears_in: $s}'
 }
 
 pf_stop() { # NAME
@@ -121,12 +227,18 @@ cmd_pf() {
           printf '%s: %s\n' "$n" "$(jq -r .error <<<"$result")" >&2
         else
           printf '%s: Argo CD at %s%s\n' "$n" "$(jq -r .url <<<"$result")" "$(jq -r 'if .reused then " (already running)" else "" end' <<<"$result")"
+          if [ -n "$(jq -r '.argocd_secret // empty' <<<"$(diag_cluster "$n")")" ]; then pf_login_say "$n"; fi
           [ "$no_open" -eq 1 ] || open_url "$(jq -r .url <<<"$result")"
         fi
       done
       [ "$code" -eq 0 ] || printf '\nIf it says forbidden, your role needs pods/portforward in the Argo CD namespace.\n' >&2
       return "$code"
       ;;
+    login)
+      [ $# -gt 0 ] || die "Usage: pmgr pf login CLUSTER"
+      pf_login_say "$1"
+      ;;
+    status) pf_status | jq -r '.[] | "\(if .alive then "running" else "stopped" end)\t\(.name)\tlocalhost:\(.port)\(if .fixed then " (fixed)" else "" end)\t\(if .login then "login configured" else "no login secret" end)"' | column -t -s $'\t' ;;
     stop)
       if [ "${1:-all}" = all ]; then
         for f in "$(pf_dir)"/*.json; do [ -f "$f" ] && pf_stop "$(basename "$f" .json)"; done
@@ -135,6 +247,12 @@ cmd_pf() {
         for n in "$@"; do pf_stop "$n" && printf 'Stopped %s.\n' "$n"; done
       fi
       ;;
-    *) die "Usage: pmgr pf [list] | pmgr pf argo CLUSTER... | --all | pmgr pf stop [CLUSTER... | all]" ;;
+    *) die "Usage: pmgr pf [list | status] | pmgr pf argo CLUSTER... | --all | pmgr pf login CLUSTER | pmgr pf stop [CLUSTER... | all]" ;;
   esac
+}
+
+pf_login_say() { # NAME : pf_login for the terminal
+  local r
+  r=$(pf_login "$1") || { printf '%s: %s\n' "$1" "$(jq -r .error <<<"$r")" >&2; return 1; }
+  jq -r '"\(.name): Argo CD password copied to the clipboard (user \(.username)); it clears in \(.clears_in)s."' <<<"$r"
 }

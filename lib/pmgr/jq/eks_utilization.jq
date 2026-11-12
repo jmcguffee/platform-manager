@@ -19,7 +19,7 @@ def owner: ((.metadata.ownerReferences // [])[0]) as $o
   | if $o == null then {kind: "Pod", name: .metadata.name}
     elif $o.kind == "ReplicaSet" then {kind: "Deployment", name: ($o.name | sub("-[a-z0-9]{5,10}$"; ""))}
     else {kind: $o.kind, name: $o.name} end;
-def base($what): {area: "utilization", resource: "\($cluster)/eks/\($what)", link: "", evidence: {}};
+def base($what): {area: "utilization", resource: "\($cluster)/eks/\($what)", link: "", evidence: {}, diag: {type: "capacity", cluster: $cluster}};
 
 . as $in
 | [$in.nodes | items[]] as $nodes

@@ -49,6 +49,8 @@ jobs:
   printf '%s' "$RISKY" >"$WF/deploy.yml"
   got=$(workflows_assess_file infra deploy.yml "$WF/deploy.yml" | checks)
   [ "$got" = "workflow.apply_on_pr workflow.continue_on_error workflow.no_cache workflow.no_concurrency workflow.no_timeout workflow.permissions workflow.script_injection workflow.static_aws_keys workflow.unpinned " ]
+  # Diagnose shows the file itself.
+  [ "$(workflows_assess_file infra deploy.yml "$WF/deploy.yml" | jq -c 'select(has("check")) | .diag' | sort -u)" = '{"type":"workflow_file","repo":"infra","path":"deploy.yml"}' ]
 }
 
 @test "a careful workflow is clean" {

@@ -78,14 +78,16 @@ def web_only: .FromPort as $f | (.IpProtocol // "") == "tcp" and $f == .ToPort a
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: $e, type: "RDS instance", id: .DBInstanceIdentifier,
          name: .Endpoint.Address, detail: "publicly accessible", allowed: allowed([.DBInstanceIdentifier])} ),
       ( select(allowed([$db.DBInstanceIdentifier]) | not) | base("rds/\(.DBInstanceIdentifier)")
-        + {check: "security.public_database", severity: "error",
+        + {diag: {type: "rds", profile: $in.label, region: $in.region, id: .DBInstanceIdentifier},
+           check: "security.public_database", severity: "error",
            message: "RDS instance \(.DBInstanceIdentifier) is publicly accessible (\(where($e)))",
            fix: "Turn off Publicly accessible (modify-db-instance --no-publicly-accessible) and keep it in private subnets."} ) ),
   ( $in.redshift.Clusters // [] | .[] | select(.PubliclyAccessible == true) | . as $c | env(.Tags; .VpcId) as $e
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: $e, type: "Redshift cluster", id: .ClusterIdentifier,
          name: (.Endpoint.Address // ""), detail: "publicly accessible", allowed: allowed([.ClusterIdentifier])} ),
       ( select(allowed([$c.ClusterIdentifier]) | not) | base("redshift/\(.ClusterIdentifier)")
-        + {check: "security.public_database", severity: "error",
+        + {diag: {type: "redshift", profile: $in.label, region: $in.region, id: .ClusterIdentifier},
+           check: "security.public_database", severity: "error",
            message: "Redshift cluster \(.ClusterIdentifier) is publicly accessible (\(where($e)))",
            fix: "Turn off public accessibility on the cluster and keep it in private subnets."} ) ),
   ( $in.msk.ClusterInfoList // [] | .[] | select(((.Provisioned.BrokerNodeGroupInfo.ConnectivityInfo.PublicAccess.Type) // "DISABLED") != "DISABLED")
@@ -93,7 +95,7 @@ def web_only: .FromPort as $f | (.IpProtocol // "") == "tcp" and $f == .ToPort a
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: $e, type: "MSK cluster", id: .ClusterName,
          name: .ClusterName, detail: "public access on", allowed: allowed([.ClusterName])} ),
       ( select(allowed([$k.ClusterName]) | not) | base("msk/\(.ClusterName)")
-        + {check: "security.public_kafka", severity: "error", message: "MSK cluster \(.ClusterName) has public access turned on (\(where($e)))",
+        + {diag: {type: "msk", profile: $in.label, region: $in.region, id: .ClusterName}, check: "security.public_kafka", severity: "error", message: "MSK cluster \(.ClusterName) has public access turned on (\(where($e)))",
            fix: "Turn public access off, and reach the brokers through the VPC (VPN or PrivateLink)."} ) ),
 
   # --- EKS API endpoints ---------------------------------------------------------------------
@@ -103,7 +105,7 @@ def web_only: .FromPort as $f | (.IpProtocol // "") == "tcp" and $f == .ToPort a
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: $e, type: "EKS API endpoint", id: .name,
          name: .endpoint, detail: "public, from \($cidrs | join(", "))", allowed: (($open | not) or allowed([.name]))} ),
       ( select($open and (allowed([$k.name]) | not)) | base("eks/\(.name)")
-        + {check: "security.public_eks_api", severity: (if is_public_env($e) then "warning" else "error" end),
+        + {diag: {type: "eks", profile: $in.label, region: $in.region, id: .name}, check: "security.public_eks_api", severity: (if is_public_env($e) then "warning" else "error" end),
            message: "EKS cluster \(.name)'s API endpoint is public to 0.0.0.0/0 (\(where($e)))",
            fix: "Turn on private access and turn off public access, or limit publicAccessCidrs to your VPN egress IPs."} ) ),
 
@@ -114,7 +116,7 @@ def web_only: .FromPort as $f | (.IpProtocol // "") == "tcp" and $f == .ToPort a
     | ( {kind: "exposure", account: $in.label, region: $in.region, env: $e, type: "EC2 instance", id: .InstanceId,
          name: $name, detail: "public IP \(.PublicIpAddress)", allowed: allowed([.InstanceId, $name])} ),
       ( select(allowed([$i.InstanceId, $name]) | not) | base("ec2/\(.InstanceId)")
-        + {check: "security.public_instance", severity: "warning",
+        + {diag: {type: "ec2", profile: $in.label, region: $in.region, id: .InstanceId}, check: "security.public_instance", severity: "warning",
            message: "Instance \($name) (\(.InstanceId)) has a public IP in \(where($e))",
            fix: "Launch it in a private subnet without a public IP, and reach it through SSM Session Manager or VPN."} ) ),
 

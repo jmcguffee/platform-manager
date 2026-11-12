@@ -55,6 +55,8 @@ assess() { pipelines_assess infra main "$1" "${2:-"{}"}" 14; }
   done
   got=$(assess "$(runs "${specs[@]}")" | checks)
   [ "$got" = "pipeline.flaky pipeline.queued pipeline.slow " ]
+  # Diagnose lists the workflow's recent runs.
+  [ "$(assess "$(runs "${specs[@]}")" | jq -r 'select(has("check")) | .diag.type' | sort -u)" = runs ]
 }
 
 @test "Dependabot runs get one stable label in CI usage" {

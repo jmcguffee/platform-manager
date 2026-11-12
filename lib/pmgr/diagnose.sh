@@ -66,7 +66,7 @@ diagnose_finding() { # DIAG_JSON
   local d=$1 type c
   type=$(jq -r '.type // ""' <<<"$d")
   case $type in
-    pod | workload | node | object | argo)
+    pod | workload | node | object | argo | capacity)
       c=$(diag_cluster "$(jq -r .cluster <<<"$d")")
       [ -n "$c" ] || { jq -cn '{title: "Cluster", command: "", output: "This cluster is no longer in your config.", ok: false}'; return 0; }
       ;;
@@ -125,8 +125,80 @@ diagnose_finding() { # DIAG_JSON
     monitor)
       diag_section "Monitor $(jq -r .id <<<"$d")" "$(cfg '.datadog.pup // "pup"')" monitors get "$(jq -r .id <<<"$d")" --read-only -o yaml
       ;;
+    page)
+      diag_section "Page $(jq -r .id <<<"$d")" "$(cfg '.datadog.pup // "pup"')" on-call pages get "$(jq -r .id <<<"$d")" --read-only -o yaml
+      ;;
+    incident)
+      diag_section "Incident $(jq -r .id <<<"$d")" "$(cfg '.datadog.pup // "pup"')" incidents get "$(jq -r .id <<<"$d")" --read-only -o yaml
+      ;;
+    rds | redshift | elasticache | msk | ec2 | eks) diag_aws "$d" ;;
+    cluster) diag_cluster_access "$d" ;;
+    capacity)
+      diag_section "Node usage right now" diag_k8s "$c" top nodes
+      diag_section "Nodes" diag_k8s "$c" get nodes -o wide -L node.kubernetes.io/instance-type,karpenter.sh/capacity-type,eks.amazonaws.com/capacityType
+      ;;
+    workflow_file)
+      diag_section "$(jq -r .path <<<"$d") in $(jq -r .repo <<<"$d")" gh api --method GET -H "Accept: application/vnd.github.raw" \
+        "repos/$(gh_slug "$(jq -r .repo <<<"$d")")/contents/$(jq -r .path <<<"$d")"
+      ;;
+    runs)
+      diag_section "Last 15 runs of $(jq -r .workflow <<<"$d")" gh run list -R "$(gh_slug "$(jq -r .repo <<<"$d")")" \
+        --workflow "$(jq -r 'if (.path // "") != "" then .path | split("/") | last else .workflow end' <<<"$d")" --limit 15 --json status,conclusion,headBranch,event,attempt,createdAt,startedAt,updatedAt,databaseId \
+        --template '{{tablerow "WHEN" "BRANCH" "EVENT" "RESULT" "ATTEMPT" "RUN"}}{{range .}}{{tablerow (timeago .createdAt) .headBranch .event (or .conclusion .status) .attempt .databaseId}}{{end}}'
+      ;;
     *) jq -cn '{title: "Diagnose", command: "", output: "There is nothing more to look up for this finding.", ok: false}' ;;
   esac
+}
+
+# AWS resources: the settings that matter, and the last day of AWS events for it.
+diag_aws() {
+  local d=$1 type id p r
+  type=$(jq -r .type <<<"$d") id=$(jq -r '.id // .name' <<<"$d") p=$(jq -r .profile <<<"$d") r=$(jq -r .region <<<"$d")
+  case $type in
+    rds)
+      diag_section "RDS instance $id" aws rds describe-db-instances --db-instance-identifier "$id" --profile "$p" --region "$r" --output table \
+        --query 'DBInstances[].{Class:DBInstanceClass,Engine:Engine,Version:EngineVersion,Status:DBInstanceStatus,MultiAZ:MultiAZ,Public:PubliclyAccessible,StorageGB:AllocatedStorage,MaxStorageGB:MaxAllocatedStorage,Endpoint:Endpoint.Address}'
+      diag_section "RDS events, last 24 hours" aws rds describe-events --source-type db-instance --source-identifier "$id" --duration 1440 \
+        --profile "$p" --region "$r" --output table --query 'Events[].{When:Date,Message:Message}' ;;
+    redshift)
+      diag_section "Redshift cluster $id" aws redshift describe-clusters --cluster-identifier "$id" --profile "$p" --region "$r" --output table \
+        --query 'Clusters[].{NodeType:NodeType,Nodes:NumberOfNodes,Status:ClusterStatus,Public:PubliclyAccessible,Endpoint:Endpoint.Address}'
+      diag_section "Redshift events, last 24 hours" aws redshift describe-events --source-type cluster --source-identifier "$id" --duration 1440 \
+        --profile "$p" --region "$r" --output table --query 'Events[].{When:Date,Message:Message}' ;;
+    elasticache)
+      diag_section "ElastiCache $id" aws elasticache describe-replication-groups --replication-group-id "$id" --profile "$p" --region "$r" --output table \
+        --query 'ReplicationGroups[].{Status:Status,NodeType:CacheNodeType,Nodes:length(MemberClusters),Failover:AutomaticFailover,MultiAZ:MultiAZ}'
+      diag_section "ElastiCache events, last 24 hours" aws elasticache describe-events --duration 1440 --profile "$p" --region "$r" --output table \
+        --query "Events[?starts_with(SourceIdentifier, '$id')].{When:Date,Source:SourceIdentifier,Message:Message}" ;;
+    msk)
+      diag_section "MSK cluster $id" aws kafka list-clusters-v2 --cluster-name-filter "$id" --profile "$p" --region "$r" --output table \
+        --query 'ClusterInfoList[].{State:State,Brokers:Provisioned.NumberOfBrokerNodes,Type:Provisioned.BrokerNodeGroupInfo.InstanceType,Storage:Provisioned.BrokerNodeGroupInfo.StorageInfo.EbsStorageInfo.VolumeSize,Version:Provisioned.CurrentBrokerSoftwareInfo.KafkaVersion}' ;;
+    ec2)
+      diag_section "Instance $id" aws ec2 describe-instances --instance-ids "$id" --profile "$p" --region "$r" --output table \
+        --query 'Reservations[].Instances[].{Type:InstanceType,State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,Subnet:SubnetId,Groups:join(`, `,SecurityGroups[].GroupId)}' ;;
+    eks)
+      diag_section "EKS cluster $id" aws eks describe-cluster --name "$id" --profile "$p" --region "$r" --output table \
+        --query 'cluster.{Status:status,Version:version,PublicEndpoint:resourcesVpcConfig.endpointPublicAccess,PrivateEndpoint:resourcesVpcConfig.endpointPrivateAccess,PublicCIDRs:join(`, `,resourcesVpcConfig.publicAccessCidrs || `[]`),Endpoint:endpoint}' ;;
+  esac
+}
+
+# A cluster pmgr couldn't use: what EKS says about it, whether its endpoint resolves, and your
+# kubeconfig entry for it.
+diag_cluster_access() {
+  local d=$1 c target name region profile ctx endpoint
+  c=$(diag_cluster "$(jq -r .cluster <<<"$d")")
+  [ -n "$c" ] || { jq -cn '{title: "Cluster", command: "", output: "This cluster is no longer in your config.", ok: false}'; return 0; }
+  profile=$(jq -r .aws_profile <<<"$c") ctx=$(jq -r .context <<<"$c")
+  target=$(eks_target "$c")
+  if [ -n "$target" ]; then
+    name=${target%%$'\t'*} region=${target#*$'\t'}
+    diag_section "What EKS says about $name" aws eks describe-cluster --name "$name" --profile "$profile" --region "$region" --output table \
+      --query 'cluster.{Status:status,Version:version,PublicEndpoint:resourcesVpcConfig.endpointPublicAccess,PrivateEndpoint:resourcesVpcConfig.endpointPrivateAccess,PublicCIDRs:join(`, `,resourcesVpcConfig.publicAccessCidrs || `[]`),Endpoint:endpoint}'
+    diag_section "Node groups" aws eks list-nodegroups --cluster-name "$name" --profile "$profile" --region "$region" --output table
+  fi
+  diag_section "Your kubeconfig entry" kubectl config view --minify --context "$ctx" -o 'jsonpath={.clusters[0].cluster.server}{"\n"}{.users[0].user.exec.command} {.users[0].user.exec.args}{"\n"}'
+  endpoint=$(kubectl config view --minify --context "$ctx" -o 'jsonpath={.clusters[0].cluster.server}' 2>/dev/null | sed -E 's#^https?://##; s#[:/].*##')
+  [ -z "$endpoint" ] || diag_section "Does the endpoint resolve? (a private endpoint only resolves on VPN)" nslookup "$endpoint"
 }
 
 # The parts of an Argo CD Application's status that explain a failure, readable.

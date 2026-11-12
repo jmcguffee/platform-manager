@@ -103,3 +103,37 @@ post() { # BODY [TOKEN]
   run cmd_diagnose unpinned
   [ "$status" -eq 2 ]   # nothing to diagnose for a workflow-file finding
 }
+
+@test "an AWS resource gets its describe call and recent events, with its profile and region" {
+  fake 0 "| Class | db.r6g.2xlarge |" "" aws rds describe-db-instances
+  fake 0 "| When | Message |" "" aws rds describe-events
+  got=$(diagnose_finding '{"type":"rds","profile":"acct","region":"us-east-2","id":"orders"}')
+  [ "$(jq -r .title <<<"$got" | tr '\n' '|')" = "RDS instance orders|RDS events, last 24 hours|" ]
+  [[ "$(jq -r 'select(.title | startswith("RDS instance")) | .command' <<<"$got")" == "aws rds describe-db-instances --db-instance-identifier orders --profile acct --region us-east-2"* ]]
+}
+
+@test "a cluster pmgr couldn't reach: what EKS says, node groups, the kubeconfig entry and DNS" {
+  config 'clusters: [{name: prod, context: "arn:aws:eks:us-east-2:333333333333:cluster/prod-eks", aws_profile: prd}]'
+  fake 0 "| Status | ACTIVE |" "" aws eks describe-cluster --name prod-eks
+  fake 0 "| ng-1 |" "" aws eks list-nodegroups --cluster-name prod-eks
+  fake 0 "https://ABC.gr7.us-east-2.eks.amazonaws.com" "" kubectl config view
+  mkdir -p "$BATS_TEST_TMPDIR/bin" && ln -s "$BATS_TEST_DIRNAME/stubs/fake" "$BATS_TEST_TMPDIR/bin/nslookup"
+  fake 0 "Address: 10.0.1.5" "" nslookup ABC.gr7.us-east-2.eks.amazonaws.com
+  got=$(PATH="$BATS_TEST_TMPDIR/bin:$PATH" diagnose_finding '{"type":"cluster","cluster":"prod"}')
+  [[ "$(jq -r .title <<<"$got" | tr '\n' '|')" == "What EKS says about prod-eks|Node groups|Your kubeconfig entry|Does the endpoint resolve?"* ]]
+  grep -q 'eks describe-cluster --name prod-eks --profile prd --region us-east-2' "$FAKE_DIR/calls"
+  [ "$(jq -r 'select(.title | startswith("Does")) | .output' <<<"$got")" = "Address: 10.0.1.5" ]
+}
+
+@test "a flaky or slow workflow lists its recent runs; a workflow gap shows the file" {
+  fake 0 "WHEN  BRANCH  EVENT  RESULT" "" gh run list
+  got=$(diagnose_finding '{"type":"runs","repo":"org/app","path":".github/workflows/ci.yml","workflow":"CI"}')
+  [ "$(jq -r .title <<<"$got")" = "Last 15 runs of CI" ]
+  grep -q "gh.*run list -R org/app --workflow ci.yml --limit 15" "$FAKE_DIR/calls"
+  diagnose_finding '{"type":"runs","repo":"org/app","path":"","workflow":"CI"}' >/dev/null
+  grep -q "run list -R org/app --workflow CI " "$FAKE_DIR/calls"
+  fake 0 "on: push" "" gh api --method GET
+  got=$(diagnose_finding '{"type":"workflow_file","repo":"org/app","path":".github/workflows/ci.yml"}')
+  [ "$(jq -r .output <<<"$got")" = "on: push" ]
+  grep -q "repos/org/app/contents/.github/workflows/ci.yml" "$FAKE_DIR/calls"
+}

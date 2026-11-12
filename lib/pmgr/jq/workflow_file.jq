@@ -1,6 +1,7 @@
 include "workflows";
 . as $wf | triggers as $on | jobs as $jobs | runs as $body
-    | {area: "workflow", resource: $where, link: "", evidence: {}} as $base
+    | {area: "workflow", resource: $where, link: "", evidence: {},
+   diag: {type: "workflow_file", repo: ($where | split(":")[0]), path: ($where | split(":")[1:] | join(":"))}} as $base
     | ([uses[].u | select(contains("@") and (startswith("./") or startswith("docker://") | not)
          and (startswith("actions/") or startswith("github/") | not) and (test("@[0-9a-f]{40}$") | not))] | unique) as $unpinned
     | ($unpinned | if length > 0 then $base + {check: "workflow.unpinned", severity: "warning",

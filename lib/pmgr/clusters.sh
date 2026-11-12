@@ -91,7 +91,7 @@ cluster_findings() {
   fi
 
   jq -c --arg pim "$(pim_url)" '
-    . as $c | {area: "cluster", resource: .name, evidence: {context: .context}, link: ""} as $base
+    . as $c | {area: "cluster", resource: .name, evidence: {context: .context}, link: "", diag: {type: "cluster", cluster: .name}} as $base
     | if .kubernetes == "gone" then $base + {check: "cluster.gone", severity: "warning",
         message: "\(.detail). The kubeconfig context is stale.",
         fix: "Remove it with `kubectl config delete-context \(.context)` and drop '"'"'\(.name)'"'"' from your config."}

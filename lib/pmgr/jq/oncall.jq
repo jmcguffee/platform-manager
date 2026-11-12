@@ -51,17 +51,17 @@ def base($what): {area: "oncall", resource: $what, link: "", evidence: {}};
   ($monitors[] | select(.status | IN("alert", "warn", "no data")) | {kind: "monitor"} + .),
 
   ( $pages[] | select(.status | IN("resolved", "acknowledged", "closed") | not)
-    | base("page/\(.id)") + {check: "oncall.page_open", severity: "error", link: .url,
+    | base("page/\(.id)") + {check: "oncall.page_open", severity: "error", link: .url, diag: {type: "page", id: .id},
         message: "Unacknowledged \(if .urgency != "" then "\(.urgency)-urgency " else "" end)page: \(.title)"
           + (if .opened_min then " (open \(.opened_min | since))" else "" end) + (if .team != "" then ", team \(.team)" else "" end),
         fix: "Acknowledge it in Datadog On-Call so the escalation stops, then work it."} ),
   ( $pages[] | select(.status == "acknowledged")
-    | base("page/\(.id)") + {check: "oncall.page_acknowledged", severity: "warning", link: .url,
+    | base("page/\(.id)") + {check: "oncall.page_acknowledged", severity: "warning", link: .url, diag: {type: "page", id: .id},
         message: "Acknowledged page still open: \(.title)" + (if .opened_min then " (open \(.opened_min | since))" else "" end),
         fix: "Resolve it when the issue is fixed, or hand it off if you're stepping away."} ),
 
   ( $incidents[] | select(.state | IN("active", "stable"))
-    | base("incident/\(.number // .id)") + {check: "oncall.incident_\(.state)",
+    | base("incident/\(.number // .id)") + {check: "oncall.incident_\(.state)", diag: {type: "incident", id: .id},
         severity: (if .state == "active" and (.severity | test("SEV-?[12]"; "i")) then "error"
                    elif .state == "active" then "warning" else "info" end),
         link: .url,

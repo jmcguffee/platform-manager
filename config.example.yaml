@@ -25,7 +25,14 @@ clusters:
     pim_group: AWS-Staging-PlatformAdmin  # shown in hints so you know what to activate
     # argocd_namespace: argocd          # where Argo CD runs (for the Argo check and `pmgr pf argo`)
     # argocd_service: argocd-server     # the service `pmgr pf argo` forwards to
-    # argocd_port: 8080                 # stable local port; default 8080 + the cluster's position
+    # argocd_port: 8080                 # fix the local port; otherwise pmgr reuses the last one, else
+    #                                   # 8080 + the cluster's position, else a free port if that's taken
+    # Argo CD login, read from AWS Secrets Manager with this cluster's profile and copied to the
+    # clipboard (cleared after 60s). Never printed, logged or sent to the browser.
+    # argocd_secret: platform/argocd/admin   # secret name or ARN
+    # argocd_secret_key: password            # if the secret is JSON, the key holding the password
+    # argocd_secret_profile: shared-services # if the secret lives in another account
+    # argocd_username: admin                 # shown with the password; else the JSON's username, else admin
   - name: prod
     context: arn:aws:eks:us-east-1:222222222222:cluster/prod
     aws_profile: prod-platform
