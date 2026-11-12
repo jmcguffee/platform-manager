@@ -16,7 +16,9 @@ jobs:
   test:
     # macOS, because that's where pmgr runs: this also proves it works on the system bash 3.2.
     runs-on: macos-latest
-    timeout-minutes: 15
+    # The tests take about two minutes; the rest is headroom for slow macOS runner queues, which
+    # count against this limit.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
