@@ -43,7 +43,8 @@ pread() {
 
 # slurp DIR PATTERN : the JSON files matching DIR/PATTERN as one array (missing files skipped).
 # shellcheck disable=SC2086  # $2 is a glob on purpose
-slurp() { cat "$1"/$2 2>/dev/null | jq -cs . 2>/dev/null || printf '[]'; }
+# (A missing file mustn't fail the pipe: under pipefail, "|| printf" would add a second value.)
+slurp() { { cat "$1"/$2 2>/dev/null || true; } | jq -cs . 2>/dev/null || printf '[]'; }
 
 # posture_global LABEL PROFILE DIR : the account-wide reads (IAM, S3, CloudFront, WAF for CloudFront).
 posture_global() {

@@ -75,7 +75,7 @@ F() { jq -cn --arg id "$1" --arg area "$2" --arg r "$3" '{id: $id, severity: "er
   out=$(weekly_report 7)
   [[ "$out" == "# Platform update: November 5 to November 12, 2026"* ]]
   [[ "$out" == *"**2 fixed**, 2 new (2 still open), 2 errors open, 0 warnings. \$6.50/month in savings identified, \$10.00/month already saved."* ]]
-  [[ "$out" == *"## Fixed"*"**Identity**"*"- **acct/role/ci**: m a"*"**Compute**"*"acct/us-east-2/ebs/vol-1"* ]]
+  [[ "$out" == *"## Fixed"*"**Compute**"*"- **acct/us-east-2/ebs/vol-1**: m v"*"**Identity**"*"- **acct/role/ci**: m a"* ]]
   [[ "$out" == *"## Needs attention"*"acct/s3/b"*"acct/us-east-2/lb/x"* ]]
   [[ "$out" == *"| prd | 1.32 | extended support, standard support ends March 23, 2026 |"* ]]
   [[ "$out" == *"CI: 95% of 40 workflow runs succeeded."* ]]
